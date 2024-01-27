@@ -120,7 +120,7 @@ void MessageGenerator::Generate(io::Printer* printer) {
   printer->Print(
       vars,
       "private static readonly pb::MessageParser<$class_name$> _parser = new "
-      "pb::MessageParser<$class_name$>(() => new $class_name$());\n");
+      "pb::MessageParser<$class_name$>(ProtobufUnityOptimize.ProtobufFactoryContext.GetFactory<$class_name$>());\n");
 
   printer->Print("private pb::UnknownFieldSet _unknownFields;\n");
 

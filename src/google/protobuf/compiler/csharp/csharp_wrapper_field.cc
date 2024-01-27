@@ -52,6 +52,7 @@ void WrapperFieldGenerator::GenerateMembers(io::Printer* printer) {
   AddPublicMemberAttributes(printer);
   printer->Print(
     variables_,
+    "[global::Sirenix.OdinInspector.ShowInInspector]\n"
     "$access_level$ $type_name$ $property_name$ {\n"
     "  get { return $name$_; }\n"
     "  set {\n"
@@ -206,6 +207,7 @@ void WrapperOneofFieldGenerator::GenerateMembers(io::Printer* printer) {
   AddPublicMemberAttributes(printer);
   printer->Print(
     variables_,
+    "[global::Sirenix.OdinInspector.ShowInInspector]\n"
     "$access_level$ $type_name$ $property_name$ {\n"
     "  get { return $has_property_check$ ? ($type_name$) $oneof_name$_ : ($type_name$) null; }\n"
     "  set {\n"

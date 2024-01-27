@@ -1,155 +1,91 @@
-Protocol Buffers - Google's data interchange format
-===================================================
+# 池化的protoc方案（支持OdinInspector版）
 
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/protocolbuffers/protobuf/badge)](https://securityscorecards.dev/viewer/?uri=github.com/protocolbuffers/protobuf)
+讨论群：1054976810
 
-Copyright 2023 Google LLC
+## 使用方法
 
-Overview
---------
 
-Protocol Buffers (a.k.a., protobuf) are Google's language-neutral,
-platform-neutral, extensible mechanism for serializing structured data. You
-can learn more about it in [protobuf's documentation](https://protobuf.dev).
+下载所需的protoc来替换原来的protoc：
 
-This README file contains protobuf installation instructions. To install
-protobuf, you need to install the protocol compiler (used to compile .proto
-files) and the protobuf runtime for your chosen programming language.
+二进制Protoc下载
 
-Working With Protobuf Source Code
----------------------------------
+|platform|bin|
+|--|--|
+|macOs M1|进群领取| 
+|Windows(x64)|进群领取|
+|Linux|进群领取|
 
-Most users will find working from
-[supported releases](https://github.com/protocolbuffers/protobuf/releases) to be
-the easiest path.
+可以自己动手编译，编译步骤与官方文档相同。
 
-If you choose to work from the head revision of the main branch your build will
-occasionally be broken by source-incompatible changes and insufficiently-tested
-(and therefore broken) behavior.
+然后复制以下文件夹中的C#代码到你的C#工程中，和protoc生成的代码放在一起编译
 
-If you are using C++ or otherwise need to build protobuf from source as a part
-of your project, you should pin to a release commit on a release branch.
+[csharp\src\BoysheO.Protobuf.Pooled](csharp\src\BoysheO.Protobuf.Pooled)
 
-This is because even release branches can experience some instability in between
-release commits.
+ok，你已就绪。接下来，你需要在你的程序中，在调用任何ProtobufMessage前，设置好工厂上下文。
 
-### Bazel with Bzlmod
+推荐使用预先实现的池化工厂（必须在调用任何ProtobufMessage前调用，否则抛异常）
+预先实现的池化工厂是线程安全的。
 
-Protobuf supports
-[Bzlmod](https://bazel.build/external/module) with Bazel 7 +.
-Users should specify a dependency on protobuf in their MODULE.bazel file as
-follows.
-
-```
-bazel_dep(name = "protobuf", version = <VERSION>)
+```C#
+//本代码线程安全
+    ProtobufFactoryContext.UsePooledFactoryProvider();
 ```
 
-Users can optionally override the repo name, such as for compatibility with
-WORKSPACE.
+使用上述预先实现的池化工厂时，每当你使用完毕一个ProtobufMessage之后，可以将其回收：
 
-```
-bazel_dep(name = "protobuf", version = <VERSION>, repo_name = "com_google_protobuf")
-```
-
-### Bazel with WORKSPACE
-
-Users can also add the following to their legacy
-[WORKSPACE](https://bazel.build/external/overview#workspace-system) file.
-
-Note that with the release of 30.x there are a few more load statements to
-properly set up rules_java and rules_python.
-
-```
-http_archive(
-    name = "com_google_protobuf",
-    strip_prefix = "protobuf-VERSION",
-    sha256 = ...,
-    url = ...,
-)
-
-load("@com_google_protobuf//:protobuf_deps.bzl", "protobuf_deps")
-
-protobuf_deps()
-
-load("@rules_java//java:rules_java_deps.bzl", "rules_java_dependencies")
-
-rules_java_dependencies()
-
-load("@rules_java//java:repositories.bzl", "rules_java_toolchains")
-
-rules_java_toolchains()
-
-load("@rules_python//python:repositories.bzl", "py_repositories")
-
-py_repositories()
+```C#
+//本代码线程安全
+    PbMsg ins = new PbMsg();
+    PbPool<PbMsg>.Return(ins);
 ```
 
-Protobuf Compiler Installation
-------------------------------
+当然，预先实现的对象池是公开的，支持以下API
 
-The protobuf compiler is written in C++. If you are using C++, please follow
-the [C++ Installation Instructions](src/README.md) to install protoc along
-with the C++ runtime.
+```C#
+//本代码线程安全
+    var ins = PbPool<PbMsg>.Rent();
+```
 
-For non-C++ users, the simplest way to install the protocol compiler is to
-download a pre-built binary from our [GitHub release page](https://github.com/protocolbuffers/protobuf/releases).
+当你不再使用池化方案时，你可以改用原始protoc来生成Pb消息。这样的话，protobufMessage将不再使用ProtobufFactoryContext来初始化工厂。你的代码基本无需变化即可切换到非池化的状态。
 
-In the downloads section of each release, you can find pre-built binaries in
-zip packages: `protoc-$VERSION-$PLATFORM.zip`. It contains the protoc binary
-as well as a set of standard `.proto` files distributed along with protobuf.
+## 使用预先实现的池化工厂的注意事项
 
-If you are looking for an old version that is not available in the release
-page, check out the [Maven repository](https://repo1.maven.org/maven2/com/google/protobuf/protoc/).
 
-These pre-built binaries are only provided for released versions. If you want
-to use the github main version at HEAD, or you need to modify protobuf code,
-or you are using C++, it's recommended to build your own protoc binary from
-source.
+本库主要为Unity等gc效能低下的运行环境设计，特别适用于使用了grpc作为网络通信协议的项目。在gc效能高的运行环境下，池化意义不大，因此不建议在服务器端使用本库。
 
-If you would like to build protoc binary from source, see the [C++ Installation Instructions](src/README.md).
+## 如何自定义工厂
 
-Protobuf Runtime Installation
------------------------------
 
-Protobuf supports several different programming languages. For each programming
-language, you can find instructions in the corresponding source directory about
-how to install protobuf runtime for that specific language:
+如果你不想使用预先实现的池化方案，也可以实现自己的工厂方法。必须在调用任何ProtobufMessage前调用,否则抛异常.
 
-| Language                             | Source                                                      |
-|--------------------------------------|-------------------------------------------------------------|
-| C++ (include C++ runtime and protoc) | [src](src)                                                  |
-| Java                                 | [java](java)                                                |
-| Python                               | [python](python)                                            |
-| Objective-C                          | [objectivec](objectivec)                                    |
-| C#                                   | [csharp](csharp)                                            |
-| Ruby                                 | [ruby](ruby)                                                |
-| Go                                   | [protocolbuffers/protobuf-go](https://github.com/protocolbuffers/protobuf-go)|
-| PHP                                  | [php](php)                                                  |
-| Dart                                 | [dart-lang/protobuf](https://github.com/dart-lang/protobuf) |
-| JavaScript                           | [protocolbuffers/protobuf-javascript](https://github.com/protocolbuffers/protobuf-javascript)|
+```C#
+//本代码线程安全，且本API仅可调用1次
+    ProtobufFactoryContext.SetFactoryProvider(new CustomProtobufFactoryProvider());
+```
 
-Quick Start
------------
+也可以直接改写ProtobufFactoryContext的GetFactory函数，在不好管理SetFactoryProvider生命周期时，改写代码也是推荐的方法之一！
 
-The best way to learn how to use protobuf is to follow the [tutorials in our
-developer guide](https://protobuf.dev/getting-started).
+## 备注：protoc具体改进的地方
 
-If you want to learn from code examples, take a look at the examples in the
-[examples](examples) directory.
 
-Documentation
--------------
+原来protoc生成的默认new工厂方法，现在变成了由上下文提供
 
-The complete documentation is available at the [Protocol Buffers doc site](https://protobuf.dev).
+Before
 
-Support Policy
---------------
+```C#
+public sealed partial class OpenSteamRet : pb::IMessage<OpenSteamRet>
+  {
+    private static readonly pb::MessageParser<OpenSteamRet> _parser = new pb::MessageParser<OpenSteamRet>(() => new OpenSteamRet());
+    ...
+  }
+```
 
-Read about our [version support policy](https://protobuf.dev/version-support/)
-to stay current on support timeframes for the language libraries.
+After:
 
-Developer Community
--------------------
-
-To be alerted to upcoming changes in Protocol Buffers and connect with protobuf developers and users,
-[join the Google Group](https://groups.google.com/g/protobuf).
+```C#
+public sealed partial class OpenSteamRet : pb::IMessage<OpenSteamRet>
+  {
+    private static readonly pb::MessageParser<OpenSteamRet> _parser = new pb::MessageParser<OpenSteamRet>(global::BoysheO.Protobuf.Pooled.ProtobufFactoryContext.GetFactory<OpenSteamRet>());
+    ...
+  }
+```

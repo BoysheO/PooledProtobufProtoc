@@ -1,6 +1,6 @@
 {
     "31.x": {
-        "protoc_version": "31.0",
+        "protoc_version": "31.1-odin",
         "lts": false,
         "date": "2025-05-14",
         "languages": {
