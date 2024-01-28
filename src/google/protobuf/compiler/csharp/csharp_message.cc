@@ -117,17 +117,8 @@ void MessageGenerator::Generate(io::Printer* printer) {
   // All static fields and properties
   printer->Print(
       vars,
-      "private static readonly global::System.Collections.Concurrent.ConcurrentBag<$class_name$> _pool = new global::System.Collections.Concurrent.ConcurrentBag<$class_name$>();\n"
-      "public static $class_name$ Rent()\n"
-      "{\n"
-      "  return _pool.TryTake(out var ins) ? ins : new $class_name$();\n"
-      "}\n"
-      "public static void Return($class_name$ ins)\n"
-      "{\n"
-      "  _pool.Add(ins);\n"
-      "}\n"
       "private static readonly pb::MessageParser<$class_name$> _parser = new "
-      "pb::MessageParser<$class_name$>(Rent);\n");
+      "pb::MessageParser<$class_name$>(ProtobufUnityOptimize.ProtobufFactoryContext.GetFactory<$class_name$>());\n");
 
   printer->Print("private pb::UnknownFieldSet _unknownFields;\n");
 
