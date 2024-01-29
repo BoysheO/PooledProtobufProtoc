@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using Google.Protobuf;
 
 namespace BoysheO.Protobuf.Pooled
@@ -6,18 +7,29 @@ namespace BoysheO.Protobuf.Pooled
     public sealed class PbPool<T>
         where T : IBufferMessage, IMessage<T>, new()
     {
-        private static readonly global::System.Collections.Concurrent.ConcurrentBag<T> _pool =
-            new global::System.Collections.Concurrent.ConcurrentBag<T>();
+        private static readonly WeakReference<ConcurrentBag<T>> _pool =
+            new WeakReference<ConcurrentBag<T>>(new ConcurrentBag<T>());
 
         public static T Rent()
         {
-            return _pool.TryTake(out var ins) ? ins : new T();
+            if (!_pool.TryGetTarget(out var bag) || !bag.TryTake(out var ins))
+            {
+                return new T();
+            }
+
+            return ins;
         }
 
         public static void Return(T ins)
         {
             if (ins == null) throw new ArgumentNullException(nameof(ins));
-            _pool.Add(ins);
+            if (!_pool.TryGetTarget(out var bag))
+            {
+                bag = new ConcurrentBag<T>();
+                _pool.SetTarget(bag);
+            }
+
+            bag.Add(ins);
         }
     }
 }
