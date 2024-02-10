@@ -61,6 +61,7 @@ ___
     ProtobufFactoryContext.SetFactoryProvider(new CustomProtobufFactoryProvider());
 ```
 
+也可以直接改写ProtobufFactoryContext的GetFactory函数，在不好管理SetFactoryProvider生命周期时，改写代码也是推荐的方法之一！
 
 ## 备注：protoc具体改进的地方
 
