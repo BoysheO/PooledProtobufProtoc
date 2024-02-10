@@ -81,9 +81,9 @@ Before
 After:
 
 ``` C#
-  public sealed partial class ColorPaletteData : pb::IMessage<ColorPaletteData>
+  public sealed partial class OpenSteamRet : pb::IMessage<OpenSteamRet>
   {
-    private static readonly pb::MessageParser<ColorPaletteData> _parser = new pb::MessageParser<ColorPaletteData>(global::BoysheO.Protobuf.Pooled.ProtobufFactoryContext.GetFactory<ColorPaletteData>());
+    private static readonly pb::MessageParser<OpenSteamRet> _parser = new pb::MessageParser<OpenSteamRet>(global::BoysheO.Protobuf.Pooled.ProtobufFactoryContext.GetFactory<OpenSteamRet>());
     ...
   }
 ```
