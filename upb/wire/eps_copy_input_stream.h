@@ -8,6 +8,7 @@
 #ifndef UPB_WIRE_EPS_COPY_INPUT_STREAM_H_
 #define UPB_WIRE_EPS_COPY_INPUT_STREAM_H_
 
+#include <stdint.h>
 #include <string.h>
 
 #include "upb/mem/arena.h"
@@ -27,18 +28,14 @@ extern "C" {
 // this invariant.
 #define kUpb_EpsCopyInputStream_SlopBytes 16
 
-enum {
-  kUpb_EpsCopyInputStream_NoAliasing = 0,
-  kUpb_EpsCopyInputStream_OnPatch = 1,
-  kUpb_EpsCopyInputStream_NoDelta = 2
-};
-
 typedef struct {
   const char* end;        // Can read up to SlopBytes bytes beyond this.
   const char* limit_ptr;  // For bounds checks, = end + UPB_MIN(limit, 0)
-  uintptr_t aliasing;
-  int limit;   // Submessage limit relative to end
-  bool error;  // To distinguish between EOF and error.
+  uintptr_t input_delta;  // Diff between the original input pointer and patch
+  const char* buffer_start;  // Pointer to the original input buffer
+  int limit;                 // Submessage limit relative to end
+  bool error;                // To distinguish between EOF and error.
+  bool aliasing;
   char patch[kUpb_EpsCopyInputStream_SlopBytes * 2];
 } upb_EpsCopyInputStream;
 
@@ -61,20 +58,20 @@ typedef const char* upb_EpsCopyInputStream_IsDoneFallbackFunc(
 UPB_INLINE void upb_EpsCopyInputStream_Init(upb_EpsCopyInputStream* e,
                                             const char** ptr, size_t size,
                                             bool enable_aliasing) {
+  e->buffer_start = *ptr;
   if (size <= kUpb_EpsCopyInputStream_SlopBytes) {
     memset(&e->patch, 0, 32);
     if (size) memcpy(&e->patch, *ptr, size);
-    e->aliasing = enable_aliasing ? (uintptr_t)*ptr - (uintptr_t)e->patch
-                                  : kUpb_EpsCopyInputStream_NoAliasing;
+    e->input_delta = (uintptr_t)*ptr - (uintptr_t)e->patch;
     *ptr = e->patch;
     e->end = *ptr + size;
     e->limit = 0;
   } else {
     e->end = *ptr + size - kUpb_EpsCopyInputStream_SlopBytes;
     e->limit = kUpb_EpsCopyInputStream_SlopBytes;
-    e->aliasing = enable_aliasing ? kUpb_EpsCopyInputStream_NoDelta
-                                  : kUpb_EpsCopyInputStream_NoAliasing;
+    e->input_delta = 0;
   }
+  e->aliasing = enable_aliasing;
   e->limit_ptr = e->end;
   e->error = false;
 }
@@ -165,7 +162,7 @@ UPB_INLINE size_t upb_EpsCopyInputStream_BytesAvailable(
 UPB_INLINE bool upb_EpsCopyInputStream_CheckSize(
     const upb_EpsCopyInputStream* e, const char* ptr, int size) {
   UPB_ASSERT(size >= 0);
-  return ptr - e->end + size <= e->limit;
+  return size <= e->limit - (ptr - e->end);
 }
 
 UPB_INLINE bool _upb_EpsCopyInputStream_CheckSizeAvailable(
@@ -217,7 +214,7 @@ UPB_INLINE bool upb_EpsCopyInputStream_CheckSubMessageSizeAvailable(
 // upb_EpsCopyInputStream_Init() when this stream was initialized.
 UPB_INLINE bool upb_EpsCopyInputStream_AliasingEnabled(
     upb_EpsCopyInputStream* e) {
-  return e->aliasing != kUpb_EpsCopyInputStream_NoAliasing;
+  return e->aliasing;
 }
 
 // Returns true if aliasing_enabled=true was passed to
@@ -227,8 +224,22 @@ UPB_INLINE bool upb_EpsCopyInputStream_AliasingAvailable(
     upb_EpsCopyInputStream* e, const char* ptr, size_t size) {
   // When EpsCopyInputStream supports streaming, this will need to become a
   // runtime check.
-  return upb_EpsCopyInputStream_CheckDataSizeAvailable(e, ptr, size) &&
-         e->aliasing >= kUpb_EpsCopyInputStream_NoDelta;
+  return e->aliasing &&
+         upb_EpsCopyInputStream_CheckDataSizeAvailable(e, ptr, size);
+}
+
+// Returns a pointer into an input buffer that corresponds to the parsing
+// pointer `ptr`.  The returned pointer may be the same as `ptr`, but also may
+// be different if we are currently parsing out of the patch buffer.
+UPB_INLINE const char* upb_EpsCopyInputStream_GetInputPtr(
+    upb_EpsCopyInputStream* e, const char* ptr) {
+  // This somewhat silly looking add-and-subtract behavior provides provenance
+  // from the original input buffer's pointer. After optimization it produces
+  // the same assembly as just casting `(uintptr_t)ptr+input_delta`
+  // https://godbolt.org/z/zosG88oPn
+  size_t position =
+      (uintptr_t)ptr + e->input_delta - (uintptr_t)e->buffer_start;
+  return e->buffer_start + position;
 }
 
 // Returns a pointer into an input buffer that corresponds to the parsing
@@ -240,9 +251,7 @@ UPB_INLINE bool upb_EpsCopyInputStream_AliasingAvailable(
 UPB_INLINE const char* upb_EpsCopyInputStream_GetAliasedPtr(
     upb_EpsCopyInputStream* e, const char* ptr) {
   UPB_ASSUME(upb_EpsCopyInputStream_AliasingAvailable(e, ptr, 0));
-  uintptr_t delta =
-      e->aliasing == kUpb_EpsCopyInputStream_NoDelta ? 0 : e->aliasing;
-  return (const char*)((uintptr_t)ptr + delta);
+  return upb_EpsCopyInputStream_GetInputPtr(e, ptr);
 }
 
 // Reads string data from the input, aliasing into the input buffer instead of
@@ -356,9 +365,7 @@ UPB_INLINE const char* _upb_EpsCopyInputStream_IsDoneFallbackInline(
     e->limit -= kUpb_EpsCopyInputStream_SlopBytes;
     e->limit_ptr = e->end + e->limit;
     UPB_ASSERT(ptr < e->limit_ptr);
-    if (e->aliasing != kUpb_EpsCopyInputStream_NoAliasing) {
-      e->aliasing = (uintptr_t)old_end - (uintptr_t)new_start;
-    }
+    e->input_delta = (uintptr_t)old_end - (uintptr_t)new_start;
     return callback(e, old_end, new_start);
   } else {
     UPB_ASSERT(overrun > e->limit);

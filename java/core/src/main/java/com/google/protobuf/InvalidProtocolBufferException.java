@@ -132,13 +132,14 @@ public class InvalidProtocolBufferException extends IOException {
   static InvalidProtocolBufferException recursionLimitExceeded() {
     return new InvalidProtocolBufferException(
         "Protocol message had too many levels of nesting.  May be malicious.  "
-            + "Use CodedInputStream.setRecursionLimit() to increase the depth limit.");
+            + "Use setRecursionLimit() to increase the recursion depth limit.");
   }
 
   static InvalidProtocolBufferException sizeLimitExceeded() {
     return new InvalidProtocolBufferException(
-        "Protocol message was too large.  May be malicious.  "
-            + "Use CodedInputStream.setSizeLimit() to increase the size limit.");
+        "Protocol message was too large.  May be malicious.  Use CodedInputStream.setSizeLimit() to"
+            + " increase the size limit. If reading multiple messages, consider resetting the"
+            + " counter between each message using CodedInputStream.resetSizeCounter().");
   }
 
   static InvalidProtocolBufferException parseFailure() {

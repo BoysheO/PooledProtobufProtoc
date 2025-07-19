@@ -14,33 +14,33 @@ import static org.junit.Assert.assertThrows;
 import com.google.protobuf.Descriptors.Descriptor;
 import com.google.protobuf.Descriptors.FieldDescriptor;
 import com.google.protobuf.test.UnittestImport;
-import protobuf_unittest.EnumWithNoOuter;
-import protobuf_unittest.MessageWithNoOuter;
-import protobuf_unittest.MultipleFilesTestProto;
-import protobuf_unittest.NestedExtension.MyNestedExtension;
-import protobuf_unittest.NonNestedExtension;
-import protobuf_unittest.NonNestedExtension.MessageToBeExtended;
-import protobuf_unittest.NonNestedExtension.MyNonNestedExtension;
-import protobuf_unittest.OuterClassNameTest2OuterClass;
-import protobuf_unittest.OuterClassNameTest3OuterClass;
-import protobuf_unittest.OuterClassNameTestOuterClass;
-import protobuf_unittest.ServiceWithNoOuter;
-import protobuf_unittest.UnittestOptimizeFor.TestOptimizedForSize;
-import protobuf_unittest.UnittestOptimizeFor.TestOptionalOptimizedForSize;
-import protobuf_unittest.UnittestOptimizeFor.TestRequiredOptimizedForSize;
-import protobuf_unittest.UnittestProto;
-import protobuf_unittest.UnittestProto.ForeignEnum;
-import protobuf_unittest.UnittestProto.ForeignMessage;
-import protobuf_unittest.UnittestProto.ForeignMessageOrBuilder;
-import protobuf_unittest.UnittestProto.NestedTestAllTypes;
-import protobuf_unittest.UnittestProto.TestAllExtensions;
-import protobuf_unittest.UnittestProto.TestAllTypes;
-import protobuf_unittest.UnittestProto.TestAllTypes.NestedMessage;
-import protobuf_unittest.UnittestProto.TestAllTypesOrBuilder;
-import protobuf_unittest.UnittestProto.TestExtremeDefaultValues;
-import protobuf_unittest.UnittestProto.TestOneof2;
-import protobuf_unittest.UnittestProto.TestPackedTypes;
-import protobuf_unittest.UnittestProto.TestUnpackedTypes;
+import proto2_unittest.EnumWithNoOuter;
+import proto2_unittest.MessageWithNoOuter;
+import proto2_unittest.MultipleFilesTestProto;
+import proto2_unittest.NestedExtension.MyNestedExtension;
+import proto2_unittest.NonNestedExtension;
+import proto2_unittest.NonNestedExtension.MessageToBeExtended;
+import proto2_unittest.NonNestedExtension.MyNonNestedExtension;
+import proto2_unittest.OuterClassNameTest2OuterClass;
+import proto2_unittest.OuterClassNameTest3OuterClass;
+import proto2_unittest.OuterClassNameTestOuterClass;
+import proto2_unittest.ServiceWithNoOuter;
+import proto2_unittest.UnittestOptimizeFor.TestOptimizedForSize;
+import proto2_unittest.UnittestOptimizeFor.TestOptionalOptimizedForSize;
+import proto2_unittest.UnittestOptimizeFor.TestRequiredOptimizedForSize;
+import proto2_unittest.UnittestProto;
+import proto2_unittest.UnittestProto.ForeignEnum;
+import proto2_unittest.UnittestProto.ForeignMessage;
+import proto2_unittest.UnittestProto.ForeignMessageOrBuilder;
+import proto2_unittest.UnittestProto.NestedTestAllTypes;
+import proto2_unittest.UnittestProto.TestAllExtensions;
+import proto2_unittest.UnittestProto.TestAllTypes;
+import proto2_unittest.UnittestProto.TestAllTypes.NestedMessage;
+import proto2_unittest.UnittestProto.TestAllTypesOrBuilder;
+import proto2_unittest.UnittestProto.TestExtremeDefaultValues;
+import proto2_unittest.UnittestProto.TestOneof2;
+import proto2_unittest.UnittestProto.TestPackedTypes;
+import proto2_unittest.UnittestProto.TestUnpackedTypes;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -51,6 +51,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import org.junit.After;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -1384,6 +1388,7 @@ public class GeneratedMessageTest {
   // =================================================================
   // oneof generated code test
   @Test
+  @SuppressWarnings("RedundantSetterCall")
   public void testOneofEnumCase() throws Exception {
     TestOneof2 message =
         TestOneof2.newBuilder().setFooInt(123).setFooString("foo").setFooCord("bar").build();
@@ -1399,6 +1404,7 @@ public class GeneratedMessageTest {
   }
 
   @Test
+  @SuppressWarnings("RedundantSetterCall")
   public void testSetOneofClearsOthers() throws Exception {
     TestOneof2.Builder builder = TestOneof2.newBuilder();
     TestOneof2 message = builder.setFooInt(123).setFooString("foo").buildPartial();
@@ -1933,5 +1939,41 @@ public class GeneratedMessageTest {
 
     assertThat(builder.getRepeatedField(REPEATED_NESTED_MESSAGE_EXTENSION, 0))
         .isEqualTo(NestedMessage.newBuilder().setBb(100).build());
+  }
+
+  @Test
+  public void getAllFields_repeatedFieldsAreNotMutable() {
+    TestAllTypes testMsg =
+        TestAllTypes.newBuilder()
+            .addRepeatedInt32(1)
+            .addRepeatedInt32(2)
+            .addRepeatedNestedMessage(NestedMessage.newBuilder().setBb(111).build())
+            .build();
+
+    FieldDescriptor repeatedInt32Field =
+        TestAllTypes.getDescriptor().findFieldByNumber(TestAllTypes.REPEATED_INT32_FIELD_NUMBER);
+    FieldDescriptor repeatedMsgField =
+        TestAllTypes.getDescriptor()
+            .findFieldByNumber(TestAllTypes.REPEATED_NESTED_MESSAGE_FIELD_NUMBER);
+    Map<FieldDescriptor, Object> allFields = testMsg.getAllFields();
+    List<?> list = (List<?>) allFields.get(repeatedInt32Field);
+    assertThat(list).hasSize(2);
+    assertThrows(UnsupportedOperationException.class, list::clear);
+    list = (List<?>) allFields.get(repeatedMsgField);
+    assertThat(list).hasSize(1);
+    assertThrows(UnsupportedOperationException.class, list::clear);
+
+    TestAllTypes.Builder builder = testMsg.toBuilder();
+    allFields = builder.getAllFields();
+    list = (List<?>) allFields.get(repeatedInt32Field);
+    assertThat(list).hasSize(2);
+    assertThrows(UnsupportedOperationException.class, list::clear);
+    builder.clearField(repeatedInt32Field);
+    assertThat(list).hasSize(2);
+    list = (List<?>) allFields.get(repeatedMsgField);
+    assertThat(list).hasSize(1);
+    assertThrows(UnsupportedOperationException.class, list::clear);
+    builder.clearField(repeatedMsgField);
+    assertThat(list).hasSize(1);
   }
 }

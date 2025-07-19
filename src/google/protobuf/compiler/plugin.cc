@@ -10,6 +10,7 @@
 #include "google/protobuf/compiler/plugin.h"
 
 #include <iostream>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -58,6 +59,7 @@ class GeneratorResponseContext : public GeneratorContext {
     file->set_name(filename);
     return new io::StringOutputStream(file->mutable_content());
   }
+
 
   io::ZeroCopyOutputStream* OpenForInsert(
       const std::string& filename,

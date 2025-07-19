@@ -7,12 +7,16 @@
 
 #include "upb/reflection/internal/enum_value_def.h"
 
+#include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 
+#include "upb/base/string_view.h"
+#include "upb/mem/arena.h"
+#include "upb/reflection/def.h"
 #include "upb/reflection/def_type.h"
 #include "upb/reflection/enum_def.h"
 #include "upb/reflection/enum_value_def.h"
-#include "upb/reflection/file_def.h"
 #include "upb/reflection/internal/def_builder.h"
 #include "upb/reflection/internal/enum_def.h"
 
@@ -20,14 +24,11 @@
 #include "upb/port/def.inc"
 
 struct upb_EnumValueDef {
-  const UPB_DESC(EnumValueOptions*) opts;
+  UPB_ALIGN_AS(8) const UPB_DESC(EnumValueOptions*) opts;
   const UPB_DESC(FeatureSet*) resolved_features;
   const upb_EnumDef* parent;
   const char* full_name;
   int32_t number;
-#if UINTPTR_MAX == 0xffffffff
-  uint32_t padding;  // Increase size to a multiple of 8.
-#endif
 };
 
 upb_EnumValueDef* _upb_EnumValueDef_At(const upb_EnumValueDef* v, int i) {
@@ -41,7 +42,8 @@ static int _upb_EnumValueDef_Compare(const void* p1, const void* p2) {
 }
 
 const upb_EnumValueDef** _upb_EnumValueDefs_Sorted(const upb_EnumValueDef* v,
-                                                   int n, upb_Arena* a) {
+                                                   size_t n, upb_Arena* a) {
+  if (SIZE_MAX / sizeof(void*) < n) return NULL;
   // TODO: Try to replace this arena alloc with a persistent scratch buffer.
   upb_EnumValueDef** out =
       (upb_EnumValueDef**)upb_Arena_Malloc(a, n * sizeof(void*));
@@ -113,15 +115,10 @@ static void create_enumvaldef(upb_DefBuilder* ctx, const char* prefix,
 static void _upb_EnumValueDef_CheckZeroValue(upb_DefBuilder* ctx,
                                              const upb_EnumDef* e,
                                              const upb_EnumValueDef* v, int n) {
-  if (upb_EnumDef_IsClosed(e) || n == 0 || v[0].number == 0) return;
-
-  // When the special UPB_TREAT_PROTO2_ENUMS_LIKE_PROTO3 is enabled, we have to
-  // exempt proto2 enums from this check, even when we are treating them as
+  // When the special UPB_TREAT_CLOSED_ENUMS_LIKE_OPEN is enabled, we have to
+  // exempt closed enums from this check, even when we are treating them as
   // open.
-  if (UPB_TREAT_PROTO2_ENUMS_LIKE_PROTO3 &&
-      upb_FileDef_Syntax(upb_EnumDef_File(e)) == kUpb_Syntax_Proto2) {
-    return;
-  }
+  if (upb_EnumDef_IsSpecifiedAsClosed(e) || n == 0 || v[0].number == 0) return;
 
   _upb_DefBuilder_Errf(ctx, "for open enums, the first value must be zero (%s)",
                        upb_EnumDef_FullName(e));
@@ -135,8 +132,7 @@ upb_EnumValueDef* _upb_EnumValueDefs_New(
     bool* is_sorted) {
   _upb_DefType_CheckPadding(sizeof(upb_EnumValueDef));
 
-  upb_EnumValueDef* v =
-      _upb_DefBuilder_Alloc(ctx, sizeof(upb_EnumValueDef) * n);
+  upb_EnumValueDef* v = UPB_DEFBUILDER_ALLOCARRAY(ctx, upb_EnumValueDef, n);
 
   *is_sorted = true;
   uint32_t previous = 0;

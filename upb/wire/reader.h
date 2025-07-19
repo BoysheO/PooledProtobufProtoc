@@ -8,6 +8,10 @@
 #ifndef UPB_WIRE_READER_H_
 #define UPB_WIRE_READER_H_
 
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
 #include "upb/base/internal/endian.h"
 #include "upb/wire/eps_copy_input_stream.h"
 #include "upb/wire/internal/reader.h"
@@ -42,14 +46,10 @@ UPB_FORCEINLINE const char* upb_WireReader_ReadTag(const char* ptr,
 }
 
 // Given a tag, returns the field number.
-UPB_INLINE uint32_t upb_WireReader_GetFieldNumber(uint32_t tag) {
-  return UPB_PRIVATE(_upb_WireReader_GetFieldNumber)(tag);
-}
+UPB_API_INLINE uint32_t upb_WireReader_GetFieldNumber(uint32_t tag);
 
 // Given a tag, returns the wire type.
-UPB_INLINE uint8_t upb_WireReader_GetWireType(uint32_t tag) {
-  return UPB_PRIVATE(_upb_WireReader_GetWireType)(tag);
-}
+UPB_API_INLINE uint8_t upb_WireReader_GetWireType(uint32_t tag);
 
 UPB_INLINE const char* upb_WireReader_ReadVarint(const char* ptr,
                                                  uint64_t* val) {
@@ -138,7 +138,9 @@ UPB_INLINE const char* _upb_WireReader_SkipValue(
     case kUpb_WireType_Delimited: {
       int size;
       ptr = upb_WireReader_ReadSize(ptr, &size);
-      if (!ptr) return NULL;
+      if (!ptr || !upb_EpsCopyInputStream_CheckSize(stream, ptr, size)) {
+        return NULL;
+      }
       ptr += size;
       return ptr;
     }

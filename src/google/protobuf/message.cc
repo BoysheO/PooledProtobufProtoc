@@ -14,9 +14,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <new>
+#include <new>  // IWYU pragma: keep for operator new().
+#include <optional>
+#include <queue>
 #include <string>
+#include <vector>
 
+#include "absl/base/call_once.h"
+#include "absl/base/optimization.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/hash/hash.h"
@@ -25,7 +30,6 @@
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
-#include "absl/types/optional.h"
 #include "google/protobuf/descriptor.h"
 #include "google/protobuf/descriptor.pb.h"
 #include "google/protobuf/dynamic_message.h"
@@ -39,9 +43,9 @@
 #include "google/protobuf/port.h"
 #include "google/protobuf/reflection_internal.h"
 #include "google/protobuf/reflection_ops.h"
+#include "google/protobuf/reflection_visit_fields.h"
 #include "google/protobuf/unknown_field_set.h"
 #include "google/protobuf/wire_format.h"
-#include "google/protobuf/wire_format_lite.h"
 
 
 // Must be included last.
@@ -58,13 +62,30 @@ void RegisterFileLevelMetadata(const DescriptorTable* descriptor_table);
 
 }  // namespace internal
 
-using internal::DownCast;
 using internal::ReflectionOps;
 using internal::WireFormat;
-using internal::WireFormatLite;
 
 void Message::MergeImpl(MessageLite& to, const MessageLite& from) {
-  ReflectionOps::Merge(DownCast<const Message&>(from), DownCast<Message*>(&to));
+  ReflectionOps::Merge(DownCastMessage<Message>(from),
+                       DownCastMessage<Message>(&to));
+}
+
+void Message::ClearImpl() {
+  ReflectionOps::Clear(DownCastMessage<Message>(this));
+}
+
+size_t Message::ByteSizeLongImpl(const MessageLite& msg) {
+  auto& _this = DownCastMessage<Message>(msg);
+  size_t size = WireFormat::ByteSize(_this);
+  _this.AccessCachedSize().Set(internal::ToCachedSize(size));
+  return size;
+}
+
+uint8_t* Message::_InternalSerializeImpl(const MessageLite& msg,
+                                         uint8_t* target,
+                                         io::EpsCopyOutputStream* stream) {
+  return WireFormat::_InternalSerialize(DownCastMessage<Message>(msg), target,
+                                        stream);
 }
 
 void Message::MergeFrom(const Message& from) {
@@ -75,10 +96,6 @@ void Message::MergeFrom(const Message& from) {
   } else {
     class_to->full().merge_to_from(*this, from);
   }
-}
-
-void Message::CheckTypeAndMergeFrom(const MessageLite& other) {
-  MergeFrom(*DownCast<const Message*>(&other));
 }
 
 void Message::CopyFrom(const Message& from) {
@@ -106,10 +123,12 @@ void Message::CopyFrom(const Message& from) {
   }
 }
 
+#if !defined(PROTOBUF_CUSTOM_VTABLE)
 void Message::Clear() { ReflectionOps::Clear(this); }
+#endif  // !PROTOBUF_CUSTOM_VTABLE
 
-bool Message::IsInitialized() const {
-  return ReflectionOps::IsInitialized(*this);
+bool Message::IsInitializedImpl(const MessageLite& msg) {
+  return ReflectionOps::IsInitialized(DownCastMessage<Message>(msg));
 }
 
 void Message::FindInitializationErrors(std::vector<std::string>* errors) const {
@@ -132,19 +151,26 @@ void Message::DiscardUnknownFields() {
   return ReflectionOps::DiscardUnknownFields(this);
 }
 
-const char* Message::_InternalParse(const char* ptr,
-                                    internal::ParseContext* ctx) {
-#if defined(PROTOBUF_USE_TABLE_PARSER_ON_REFLECTION)
-  auto meta = GetMetadata();
-  ptr = internal::TcParser::ParseLoop(this, ptr, ctx,
-                                      meta.reflection->GetTcParseTable());
-
-  return ptr;
-#else
-  return WireFormat::_InternalParse(this, ptr, ctx);
-#endif
+Metadata Message::GetMetadata() const {
+  return GetMetadataImpl(GetClassData()->full());
 }
 
+Metadata Message::GetMetadataImpl(const internal::ClassDataFull& data) {
+  auto* table = data.descriptor_table;
+  // Only codegen types provide a table. DynamicMessage does not provide a table
+  // and instead eagerly initializes the descriptor/reflection members.
+  if (ABSL_PREDICT_TRUE(table != nullptr)) {
+    if (ABSL_PREDICT_FALSE(data.get_metadata_tracker != nullptr)) {
+      data.get_metadata_tracker();
+    }
+    absl::call_once(*table->once, [table] {
+      internal::AssignDescriptorsOnceInnerCall(table);
+    });
+  }
+  return {data.descriptor, data.reflection};
+}
+
+#if !defined(PROTOBUF_CUSTOM_VTABLE)
 uint8_t* Message::_InternalSerialize(uint8_t* target,
                                      io::EpsCopyOutputStream* stream) const {
   return WireFormat::_InternalSerialize(*this, target, stream);
@@ -155,9 +181,10 @@ size_t Message::ByteSizeLong() const {
   AccessCachedSize().Set(internal::ToCachedSize(size));
   return size;
 }
+#endif  // !PROTOBUF_CUSTOM_VTABLE
 
 size_t Message::ComputeUnknownFieldsSize(
-    size_t total_size, internal::CachedSize* cached_size) const {
+    size_t total_size, const internal::CachedSize* cached_size) const {
   total_size += WireFormat::ComputeUnknownFieldsSize(
       _internal_metadata_.unknown_fields<UnknownFieldSet>(
           UnknownFieldSet::default_instance));
@@ -166,36 +193,46 @@ size_t Message::ComputeUnknownFieldsSize(
 }
 
 size_t Message::MaybeComputeUnknownFieldsSize(
-    size_t total_size, internal::CachedSize* cached_size) const {
-  if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
+    size_t total_size, const internal::CachedSize* cached_size) const {
+  if (ABSL_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     return ComputeUnknownFieldsSize(total_size, cached_size);
   }
   cached_size->Set(internal::ToCachedSize(total_size));
   return total_size;
 }
 
+
 size_t Message::SpaceUsedLong() const {
-  auto* reflection = GetReflection();
-  if (PROTOBUF_PREDICT_TRUE(reflection != nullptr)) {
-    return reflection->SpaceUsedLong(*this);
-  }
-  // The only case that does not have reflection is RawMessage.
-  return internal::DownCast<const internal::RawMessageBase&>(*this)
-      .SpaceUsedLong();
+  return GetClassData()->full().descriptor_methods->space_used_long(*this);
 }
 
-static std::string GetTypeNameImpl(const MessageLite& msg) {
-  return DownCast<const Message&>(msg).GetDescriptor()->full_name();
+absl::string_view Message::GetTypeNameImpl(const internal::ClassData* data) {
+  return GetMetadataImpl(data->full()).descriptor->full_name();
 }
 
 static std::string InitializationErrorStringImpl(const MessageLite& msg) {
-  return DownCast<const Message&>(msg).InitializationErrorString();
+  return DownCastMessage<Message>(msg).InitializationErrorString();
 }
 
-PROTOBUF_CONSTINIT const MessageLite::DescriptorMethods
+const internal::TcParseTableBase* Message::GetTcParseTableImpl(
+    const MessageLite& msg) {
+  return DownCastMessage<Message>(msg).GetReflection()->GetTcParseTable();
+}
+
+size_t Message::SpaceUsedLongImpl(const MessageLite& msg_lite) {
+  auto& msg = DownCastMessage<Message>(msg_lite);
+  return msg.GetReflection()->SpaceUsedLong(msg);
+}
+
+static std::string DebugStringImpl(const MessageLite& msg) {
+  return DownCastMessage<Message>(msg).DebugString();
+}
+
+PROTOBUF_CONSTINIT const internal::DescriptorMethods
     Message::kDescriptorMethods = {
-        GetTypeNameImpl,
-        InitializationErrorStringImpl,
+        GetTypeNameImpl,     InitializationErrorStringImpl,
+        GetTcParseTableImpl, SpaceUsedLongImpl,
+        DebugStringImpl,
 };
 
 namespace internal {
@@ -234,12 +271,12 @@ class GeneratedMessageFactory final : public MessageFactory {
     dropped_defaults_factory_.SetDelegateToGeneratedFactory(true);
   }
 
-  absl::optional<const Message*> FindInTypeMap(const Descriptor* type)
+  std::optional<const Message*> FindInTypeMap(const Descriptor* type)
       ABSL_SHARED_LOCKS_REQUIRED(mutex_)
   {
     auto it = type_map_.find(type);
-    if (it == type_map_.end()) return absl::nullopt;
-    return it->second;
+    if (it == type_map_.end()) return std::nullopt;
+    return it->second.get();
   }
 
   const google::protobuf::internal::DescriptorTable* FindInFileMap(
@@ -285,7 +322,17 @@ class GeneratedMessageFactory final : public MessageFactory {
   DynamicMessageFactory dropped_defaults_factory_;
 
   absl::Mutex mutex_;
-  absl::flat_hash_map<const Descriptor*, const Message*> type_map_
+  class MessagePtr {
+   public:
+    MessagePtr() : value_() {}
+    explicit MessagePtr(const Message* msg) : value_(msg) {}
+    const Message* get() const { return value_; }
+    void set(const Message* msg) { value_ = msg; }
+
+   private:
+    const Message* value_;
+  };
+  absl::flat_hash_map<const Descriptor*, MessagePtr> type_map_
       ABSL_GUARDED_BY(mutex_);
 };
 
@@ -334,7 +381,7 @@ const Message* GeneratedMessageFactory::GetPrototype(const Descriptor* type) {
       // And update the main map to make the next lookup faster.
       // We don't need to recheck here. Even if someone raced us here the result
       // is the same, so we can just write it.
-      type_map_[type] = result;
+      type_map_[type].set(result);
     }
   }
 
@@ -343,7 +390,7 @@ const Message* GeneratedMessageFactory::GetPrototype(const Descriptor* type) {
 
 const Message* GeneratedMessageFactory::TryGetPrototype(
     const Descriptor* type) {
-  absl::optional<const Message*> result;
+  std::optional<const Message*> result;
   {
     absl::ReaderMutexLock lock(&mutex_);
     result = FindInTypeMap(type);
@@ -430,9 +477,11 @@ const internal::RepeatedFieldAccessor* Reflection::RepeatedFieldAccessor(
     HANDLE_PRIMITIVE_TYPE(ENUM, int32_t)
 #undef HANDLE_PRIMITIVE_TYPE
     case FieldDescriptor::CPPTYPE_STRING:
-      switch (field->options().ctype()) {
-        default:
-        case FieldOptions::STRING:
+      switch (field->cpp_string_type()) {
+        case FieldDescriptor::CppStringType::kCord:
+          ABSL_LOG(FATAL) << "Repeated cords are not supported.";
+        case FieldDescriptor::CppStringType::kView:
+        case FieldDescriptor::CppStringType::kString:
           return GetSingleton<internal::RepeatedPtrFieldStringAccessor>();
       }
       break;
@@ -448,28 +497,6 @@ const internal::RepeatedFieldAccessor* Reflection::RepeatedFieldAccessor(
 }
 
 namespace internal {
-template <>
-#if defined(_MSC_VER) && (_MSC_VER >= 1800)
-// Note: force noinline to workaround MSVC compiler bug with /Zc:inline, issue
-// #240
-PROTOBUF_NOINLINE
-#endif
-    Message*
-    GenericTypeHandler<Message>::NewFromPrototype(const Message* prototype,
-                                                  Arena* arena) {
-  return prototype->New(arena);
-}
-template <>
-#if defined(_MSC_VER) && (_MSC_VER >= 1800)
-// Note: force noinline to workaround MSVC compiler bug with /Zc:inline, issue
-// #240
-PROTOBUF_NOINLINE
-#endif
-    Arena*
-    GenericTypeHandler<Message>::GetArena(Message* value) {
-  return value->GetArena();
-}
-
 template void InternalMetadata::DoClear<UnknownFieldSet>();
 template void InternalMetadata::DoMergeFrom<UnknownFieldSet>(
     const UnknownFieldSet& other);
@@ -477,8 +504,8 @@ template void InternalMetadata::DoSwap<UnknownFieldSet>(UnknownFieldSet* other);
 template void InternalMetadata::DeleteOutOfLineHelper<UnknownFieldSet>();
 template UnknownFieldSet*
 InternalMetadata::mutable_unknown_fields_slow<UnknownFieldSet>();
-
 }  // namespace internal
+
 
 }  // namespace protobuf
 }  // namespace google

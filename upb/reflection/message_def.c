@@ -37,7 +37,7 @@
 #include "upb/port/def.inc"
 
 struct upb_MessageDef {
-  const UPB_DESC(MessageOptions*) opts;
+  UPB_ALIGN_AS(8) const UPB_DESC(MessageOptions*) opts;
   const UPB_DESC(FeatureSet*) resolved_features;
   const upb_MiniTable* layout;
   const upb_FileDef* file;
@@ -76,9 +76,6 @@ struct upb_MessageDef {
   bool in_message_set;
   bool is_sorted;
   upb_WellKnown well_known_type;
-#if UINTPTR_MAX == 0xffffffff
-  uint32_t padding;  // Increase size to a multiple of 8.
-#endif
 };
 
 static void assign_msg_wellknowntype(upb_MessageDef* m) {
@@ -415,7 +412,10 @@ void _upb_MessageDef_InsertField(upb_DefBuilder* ctx, upb_MessageDef* m,
       _upb_MessageDef_Insert(m, shortname, shortnamelen, field_v, ctx->arena);
   if (!ok) _upb_DefBuilder_OomErr(ctx);
 
-  if (strcmp(shortname, json_name) != 0 &&
+  bool skip_json_conflicts =
+      UPB_DESC(MessageOptions_deprecated_legacy_json_field_conflicts)(
+          upb_MessageDef_Options(m));
+  if (!skip_json_conflicts && strcmp(shortname, json_name) != 0 &&
       UPB_DESC(FeatureSet_json_format)(m->resolved_features) ==
           UPB_DESC(FeatureSet_ALLOW) &&
       upb_strtable_lookup(&m->ntof, json_name, &v)) {
@@ -425,13 +425,15 @@ void _upb_MessageDef_InsertField(upb_DefBuilder* ctx, upb_MessageDef* m,
   }
 
   if (upb_strtable_lookup(&m->jtof, json_name, &v)) {
-    _upb_DefBuilder_Errf(ctx, "duplicate json_name (%s)", json_name);
+    if (!skip_json_conflicts) {
+      _upb_DefBuilder_Errf(ctx, "duplicate json_name (%s)", json_name);
+    }
+  } else {
+    const size_t json_size = strlen(json_name);
+    ok = upb_strtable_insert(&m->jtof, json_name, json_size,
+                             upb_value_constptr(f), ctx->arena);
+    if (!ok) _upb_DefBuilder_OomErr(ctx);
   }
-
-  const size_t json_size = strlen(json_name);
-  ok = upb_strtable_insert(&m->jtof, json_name, json_size,
-                           upb_value_constptr(f), ctx->arena);
-  if (!ok) _upb_DefBuilder_OomErr(ctx);
 
   if (upb_inttable_lookup(&m->itof, field_number, NULL)) {
     _upb_DefBuilder_Errf(ctx, "duplicate field number (%u)", field_number);
@@ -446,7 +448,7 @@ void _upb_MessageDef_CreateMiniTable(upb_DefBuilder* ctx, upb_MessageDef* m) {
     m->layout = _upb_MessageDef_MakeMiniTable(ctx, m);
   } else {
     m->layout = upb_MiniTableFile_Message(ctx->layout, ctx->msg_count++);
-    UPB_ASSERT(m->field_count == m->layout->UPB_PRIVATE(field_count));
+    UPB_ASSERT(m->field_count == upb_MiniTable_FieldCount(m->layout));
 
     // We don't need the result of this call, but it will assign layout_index
     // for all the fields in O(n lg n) time.
@@ -504,7 +506,7 @@ void _upb_MessageDef_LinkMiniTable(upb_DefBuilder* ctx,
   for (int i = 0; i < m->field_count; i++) {
     const upb_FieldDef* f = upb_MessageDef_Field(m, i);
     const int layout_index = _upb_FieldDef_LayoutIndex(f);
-    UPB_ASSERT(layout_index < m->layout->UPB_PRIVATE(field_count));
+    UPB_ASSERT(layout_index < upb_MiniTable_FieldCount(m->layout));
     const upb_MiniTableField* mt_f =
         &m->layout->UPB_PRIVATE(fields)[layout_index];
     UPB_ASSERT(upb_FieldDef_Type(f) == upb_MiniTableField_Type(mt_f));
@@ -513,6 +515,26 @@ void _upb_MessageDef_LinkMiniTable(upb_DefBuilder* ctx,
                upb_MiniTableField_HasPresence(mt_f));
   }
 #endif
+}
+
+// Returns whether packable repeated fields in the message should be considered
+// packed by default. This is used only for the purpose of encoding
+// MiniDescriptors, so we just return true if there are more packed fields than
+// unpacked. This optimizes for smaller MiniDescriptors.
+static bool _upb_MessageDef_DefaultIsPacked(const upb_MessageDef* m) {
+  int packed = 0;
+  int unpacked = 0;
+  for (int i = 0; i < m->field_count; i++) {
+    const upb_FieldDef* f = upb_MessageDef_Field(m, i);
+    if (_upb_FieldDef_IsPackable(f)) {
+      if (upb_FieldDef_IsPacked(f)) {
+        ++packed;
+      } else {
+        ++unpacked;
+      }
+    }
+  }
+  return packed > unpacked;
 }
 
 static bool _upb_MessageDef_ValidateUtf8(const upb_MessageDef* m) {
@@ -534,8 +556,7 @@ static bool _upb_MessageDef_ValidateUtf8(const upb_MessageDef* m) {
 static uint64_t _upb_MessageDef_Modifiers(const upb_MessageDef* m) {
   uint64_t out = 0;
 
-  if (UPB_DESC(FeatureSet_repeated_field_encoding(m->resolved_features)) ==
-      UPB_DESC(FeatureSet_PACKED)) {
+  if (_upb_MessageDef_DefaultIsPacked(m)) {
     out |= kUpb_MessageModifier_DefaultIsPacked;
   }
 
@@ -639,7 +660,7 @@ bool upb_MessageDef_MiniDescriptorEncode(const upb_MessageDef* m, upb_Arena* a,
 
 static upb_StringView* _upb_ReservedNames_New(upb_DefBuilder* ctx, int n,
                                               const upb_StringView* protos) {
-  upb_StringView* sv = _upb_DefBuilder_Alloc(ctx, sizeof(upb_StringView) * n);
+  upb_StringView* sv = UPB_DEFBUILDER_ALLOCARRAY(ctx, upb_StringView, n);
   for (int i = 0; i < n; i++) {
     sv[i].data =
         upb_strdup2(protos[i].data, protos[i].size, _upb_DefBuilder_Arena(ctx));
@@ -723,7 +744,7 @@ static void create_msgdef(upb_DefBuilder* ctx, const char* prefix,
   m->real_oneof_count = m->oneof_count - synthetic_count;
 
   assign_msg_wellknowntype(m);
-  upb_inttable_compact(&m->itof, ctx->arena);
+  if (!upb_inttable_compact(&m->itof, ctx->arena)) _upb_DefBuilder_OomErr(ctx);
 
   const UPB_DESC(EnumDescriptorProto)* const* enums =
       UPB_DESC(DescriptorProto_enum_type)(msg_proto, &n_enum);
@@ -756,7 +777,7 @@ upb_MessageDef* _upb_MessageDefs_New(upb_DefBuilder* ctx, int n,
   const char* name = containing_type ? containing_type->full_name
                                      : _upb_FileDef_RawPackage(ctx->file);
 
-  upb_MessageDef* m = _upb_DefBuilder_Alloc(ctx, sizeof(upb_MessageDef) * n);
+  upb_MessageDef* m = UPB_DEFBUILDER_ALLOCARRAY(ctx, upb_MessageDef, n);
   for (int i = 0; i < n; i++) {
     create_msgdef(ctx, name, protos[i], parent_features, containing_type,
                   &m[i]);

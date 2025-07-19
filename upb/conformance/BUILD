@@ -5,20 +5,20 @@
 # license that can be found in the LICENSE file or at
 # https://developers.google.com/open-source/licenses/bsd
 
-load(
-    "//bazel:build_defs.bzl",
-    "UPB_DEFAULT_COPTS",
-    "make_shell_script",
-)
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load(
     "//bazel:upb_proto_library.bzl",
     "upb_c_proto_library",
     "upb_proto_reflection_library",
 )
+load(
+    "//upb/bazel:build_defs.bzl",
+    "UPB_DEFAULT_COPTS",
+    "make_shell_script",
+)
 
-# begin:google_only
-# package(default_applicable_licenses = ["//upb:license"])
-# end:google_only
+package(default_applicable_licenses = ["//:license"])
 
 licenses(["notice"])
 
@@ -43,18 +43,14 @@ upb_proto_reflection_library(
 upb_proto_reflection_library(
     name = "test_messages_proto2_upbdefs",
     testonly = 1,
-    visibility = [
-        "//visibility:private",  # Only private by automation, not intent. Owner may accept CLs adding visibility. See go/scheuklappen#explicit-private.
-    ],
+    visibility = ["//visibility:private"],
     deps = ["//src/google/protobuf:test_messages_proto2_proto"],
 )
 
 upb_proto_reflection_library(
     name = "test_messages_proto3_upbdefs",
     testonly = 1,
-    visibility = [
-        "//visibility:private",  # Only private by automation, not intent. Owner may accept CLs adding visibility. See go/scheuklappen#explicit-private.
-    ],
+    visibility = ["//visibility:private"],
     deps = ["//src/google/protobuf:test_messages_proto3_proto"],
 )
 
@@ -73,14 +69,14 @@ cc_binary(
         ":conformance_upb_proto_reflection",
         ":test_messages_proto2_upbdefs",
         ":test_messages_proto3_upbdefs",
-        "//src/google/protobuf/editions:test_messages_proto2_editions_upbdefs",
-        "//src/google/protobuf/editions:test_messages_proto3_editions_upbdefs",
-        "//upb:base",
-        "//upb:json",
-        "//upb:port",
-        "//upb:reflection",
-        "//upb:text",
-        "//upb:wire",
+        "//editions:test_messages_proto2_editions_upbdefs",
+        "//editions:test_messages_proto3_editions_upbdefs",
+        "//upb/base",
+        "//upb/json",
+        "//upb/port",
+        "//upb/reflection",
+        "//upb/text",
+        "//upb/wire",
     ],
 )
 
@@ -127,14 +123,14 @@ cc_binary(
         ":conformance_upb_proto_reflection",
         ":test_messages_proto2_upbdefs",
         ":test_messages_proto3_upbdefs",
-        "//src/google/protobuf/editions:test_messages_proto2_editions_upbdefs",
-        "//src/google/protobuf/editions:test_messages_proto3_editions_upbdefs",
-        "//upb:base",
-        "//upb:json",
-        "//upb:port",
-        "//upb:reflection",
-        "//upb:text",
-        "//upb:wire",
+        "//editions:test_messages_proto2_editions_upbdefs",
+        "//editions:test_messages_proto3_editions_upbdefs",
+        "//upb/base",
+        "//upb/json",
+        "//upb/port",
+        "//upb/reflection",
+        "//upb/text",
+        "//upb/wire",
     ],
 )
 

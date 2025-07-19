@@ -19,6 +19,7 @@ import java.io.OutputStream;
 import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Locale;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -343,11 +344,6 @@ public abstract class CodedOutputStream extends ByteOutput {
   public abstract void writeMessage(final int fieldNumber, final MessageLite value)
       throws IOException;
 
-  /** Write an embedded message field, including tag, to the stream. */
-  // Abstract to avoid overhead of additional virtual method calls.
-  abstract void writeMessage(final int fieldNumber, final MessageLite value, Schema schema)
-      throws IOException;
-
   /**
    * Write a MessageSet extension field to the stream. For historical reasons, the wire format
    * differs from normal fields.
@@ -451,10 +447,6 @@ public abstract class CodedOutputStream extends ByteOutput {
   /** Write an embedded message field to the stream. */
   // Abstract to avoid overhead of additional virtual method calls.
   public abstract void writeMessageNoTag(final MessageLite value) throws IOException;
-
-  /** Write an embedded message field to the stream. */
-  // Abstract to avoid overhead of additional virtual method calls.
-  abstract void writeMessageNoTag(final MessageLite value, Schema schema) throws IOException;
 
   // =================================================================
 
@@ -641,15 +633,6 @@ public abstract class CodedOutputStream extends ByteOutput {
   }
 
   /**
-   * Compute the number of bytes that would be needed to encode an embedded message field, including
-   * tag.
-   */
-  static int computeMessageSize(
-      final int fieldNumber, final MessageLite value, final Schema schema) {
-    return computeTagSize(fieldNumber) + computeMessageSizeNoTag(value, schema);
-  }
-
-  /**
    * Compute the number of bytes that would be needed to encode a MessageSet extension to the
    * stream. For historical reasons, the wire format differs from normal fields.
    */
@@ -689,7 +672,7 @@ public abstract class CodedOutputStream extends ByteOutput {
   }
 
   /**
-   * Compute the number of bytes that would be needed to encode an {@code int32} field, including
+   * Compute the number of bytes that would be needed to encode an {@code int32} field, excluding
    * tag.
    */
   public static int computeInt32SizeNoTag(final int value) {
@@ -702,7 +685,7 @@ public abstract class CodedOutputStream extends ByteOutput {
     This code is ported from the C++ varint implementation.
     Implementation notes:
 
-    To calcuate varint size, we want to count the number of 7 bit chunks required. Rather than using
+    To calculate varint size, we want to count the number of 7 bit chunks required. Rather than using
     division by 7 to accomplish this, we use multiplication by 9/64. This has a number of important
     properties:
      * It's roughly 1/7.111111. This makes the 0 bits set case have the same value as the 7 bits set
@@ -860,11 +843,6 @@ public abstract class CodedOutputStream extends ByteOutput {
     return computeLengthDelimitedFieldSize(value.getSerializedSize());
   }
 
-  /** Compute the number of bytes that would be needed to encode an embedded message field. */
-  static int computeMessageSizeNoTag(final MessageLite value, final Schema schema) {
-    return computeLengthDelimitedFieldSize(((AbstractMessageLite) value).getSerializedSize(schema));
-  }
-
   static int computeLengthDelimitedFieldSize(int fieldLength) {
     return computeUInt32SizeNoTag(fieldLength) + fieldLength;
   }
@@ -947,6 +925,22 @@ public abstract class CodedOutputStream extends ByteOutput {
 
     OutOfSpaceException(String explanationMessage, Throwable cause) {
       super(MESSAGE + ": " + explanationMessage, cause);
+    }
+
+    OutOfSpaceException(int position, int limit, int length) {
+      this(position, limit, length, null);
+    }
+
+    OutOfSpaceException(int position, int limit, int length, Throwable cause) {
+      this((long) position, (long) limit, length, cause);
+    }
+
+    OutOfSpaceException(long position, long limit, int length) {
+      this(position, limit, length, null);
+    }
+
+    OutOfSpaceException(long position, long limit, int length, Throwable cause) {
+      this(String.format(Locale.US, "Pos: %d, limit: %d, len: %d", position, limit, length), cause);
     }
   }
 
@@ -1152,8 +1146,11 @@ public abstract class CodedOutputStream extends ByteOutput {
       if ((offset | length | (buffer.length - (offset + length))) < 0) {
         throw new IllegalArgumentException(
             String.format(
+                Locale.US,
                 "Array range is invalid. Buffer.length=%d, offset=%d, length=%d",
-                buffer.length, offset, length));
+                buffer.length,
+                offset,
+                length));
       }
       this.buffer = buffer;
       this.offset = offset;
@@ -1267,14 +1264,6 @@ public abstract class CodedOutputStream extends ByteOutput {
     }
 
     @Override
-    final void writeMessage(final int fieldNumber, final MessageLite value, Schema schema)
-        throws IOException {
-      writeTag(fieldNumber, WireFormat.WIRETYPE_LENGTH_DELIMITED);
-      writeUInt32NoTag(((AbstractMessageLite) value).getSerializedSize(schema));
-      schema.writeTo(value, wrapper);
-    }
-
-    @Override
     public final void writeMessageSetExtension(final int fieldNumber, final MessageLite value)
         throws IOException {
       writeTag(WireFormat.MESSAGE_SET_ITEM, WireFormat.WIRETYPE_START_GROUP);
@@ -1299,19 +1288,14 @@ public abstract class CodedOutputStream extends ByteOutput {
     }
 
     @Override
-    final void writeMessageNoTag(final MessageLite value, Schema schema) throws IOException {
-      writeUInt32NoTag(((AbstractMessageLite) value).getSerializedSize(schema));
-      schema.writeTo(value, wrapper);
-    }
-
-    @Override
     public final void write(byte value) throws IOException {
+      int position = this.position;
       try {
         buffer[position++] = value;
       } catch (IndexOutOfBoundsException e) {
-        throw new OutOfSpaceException(
-            String.format("Pos: %d, limit: %d, len: %d", position, limit, 1), e);
+        throw new OutOfSpaceException(position, limit, 1, e);
       }
+      this.position = position; // Only update position if we stayed within the array bounds.
     }
 
     @Override
@@ -1326,44 +1310,48 @@ public abstract class CodedOutputStream extends ByteOutput {
 
     @Override
     public final void writeUInt32NoTag(int value) throws IOException {
+      int position = this.position; // Perf: hoist field to register to avoid load/stores.
       try {
         while (true) {
           if ((value & ~0x7F) == 0) {
             buffer[position++] = (byte) value;
-            return;
+            break;
           } else {
-            buffer[position++] = (byte) ((value | 0x80) & 0xFF);
+            buffer[position++] = (byte) (value | 0x80);
             value >>>= 7;
           }
         }
       } catch (IndexOutOfBoundsException e) {
-        throw new OutOfSpaceException(
-            String.format("Pos: %d, limit: %d, len: %d", position, limit, 1), e);
+        throw new OutOfSpaceException(position, limit, 1, e);
       }
+      this.position = position; // Only update position if we stayed within the array bounds.
     }
 
     @Override
     public final void writeFixed32NoTag(int value) throws IOException {
+      int position = this.position; // Perf: hoist field to register to avoid load/stores.
       try {
-        buffer[position++] = (byte) (value & 0xFF);
-        buffer[position++] = (byte) ((value >> 8) & 0xFF);
-        buffer[position++] = (byte) ((value >> 16) & 0xFF);
-        buffer[position++] = (byte) ((value >> 24) & 0xFF);
+        buffer[position] = (byte) value;
+        buffer[position + 1] = (byte) (value >> 8);
+        buffer[position + 2] = (byte) (value >> 16);
+        buffer[position + 3] = (byte) (value >> 24);
       } catch (IndexOutOfBoundsException e) {
-        throw new OutOfSpaceException(
-            String.format("Pos: %d, limit: %d, len: %d", position, limit, 1), e);
+        throw new OutOfSpaceException(position, limit, FIXED32_SIZE, e);
       }
+      // Only update position if we stayed within the array bounds.
+      this.position = position + FIXED32_SIZE;
     }
 
     @Override
     public final void writeUInt64NoTag(long value) throws IOException {
+      int position = this.position; // Perf: hoist field to register to avoid load/stores.
       if (HAS_UNSAFE_ARRAY_OPERATIONS && spaceLeft() >= MAX_VARINT_SIZE) {
         while (true) {
           if ((value & ~0x7FL) == 0) {
             UnsafeUtil.putByte(buffer, position++, (byte) value);
-            return;
+            break;
           } else {
-            UnsafeUtil.putByte(buffer, position++, (byte) (((int) value | 0x80) & 0xFF));
+            UnsafeUtil.putByte(buffer, position++, (byte) ((int) value | 0x80));
             value >>>= 7;
           }
         }
@@ -1372,45 +1360,46 @@ public abstract class CodedOutputStream extends ByteOutput {
           while (true) {
             if ((value & ~0x7FL) == 0) {
               buffer[position++] = (byte) value;
-              return;
+              break;
             } else {
-              buffer[position++] = (byte) (((int) value | 0x80) & 0xFF);
+              buffer[position++] = (byte) ((int) value | 0x80);
               value >>>= 7;
             }
           }
         } catch (IndexOutOfBoundsException e) {
-          throw new OutOfSpaceException(
-              String.format("Pos: %d, limit: %d, len: %d", position, limit, 1), e);
+          throw new OutOfSpaceException(position, limit, 1, e);
         }
       }
+      this.position = position; // Only update position if we stayed within the array bounds.
     }
 
     @Override
     public final void writeFixed64NoTag(long value) throws IOException {
+      int position = this.position; // Perf: hoist field to register to avoid load/stores.
       try {
-        buffer[position++] = (byte) ((int) (value) & 0xFF);
-        buffer[position++] = (byte) ((int) (value >> 8) & 0xFF);
-        buffer[position++] = (byte) ((int) (value >> 16) & 0xFF);
-        buffer[position++] = (byte) ((int) (value >> 24) & 0xFF);
-        buffer[position++] = (byte) ((int) (value >> 32) & 0xFF);
-        buffer[position++] = (byte) ((int) (value >> 40) & 0xFF);
-        buffer[position++] = (byte) ((int) (value >> 48) & 0xFF);
-        buffer[position++] = (byte) ((int) (value >> 56) & 0xFF);
+        buffer[position] = (byte) value;
+        buffer[position + 1] = (byte) (value >> 8);
+        buffer[position + 2] = (byte) (value >> 16);
+        buffer[position + 3] = (byte) (value >> 24);
+        buffer[position + 4] = (byte) (value >> 32);
+        buffer[position + 5] = (byte) (value >> 40);
+        buffer[position + 6] = (byte) (value >> 48);
+        buffer[position + 7] = (byte) (value >> 56);
       } catch (IndexOutOfBoundsException e) {
-        throw new OutOfSpaceException(
-            String.format("Pos: %d, limit: %d, len: %d", position, limit, 1), e);
+        throw new OutOfSpaceException(position, limit, FIXED64_SIZE, e);
       }
+      // Only update position if we stayed within the array bounds.
+      this.position = position + FIXED64_SIZE;
     }
 
     @Override
     public final void write(byte[] value, int offset, int length) throws IOException {
       try {
         System.arraycopy(value, offset, buffer, position, length);
-        position += length;
       } catch (IndexOutOfBoundsException e) {
-        throw new OutOfSpaceException(
-            String.format("Pos: %d, limit: %d, len: %d", position, limit, length), e);
+        throw new OutOfSpaceException(position, limit, length, e);
       }
+      position += length;
     }
 
     @Override
@@ -1425,8 +1414,7 @@ public abstract class CodedOutputStream extends ByteOutput {
         value.get(buffer, position, length);
         position += length;
       } catch (IndexOutOfBoundsException e) {
-        throw new OutOfSpaceException(
-            String.format("Pos: %d, limit: %d, len: %d", position, limit, length), e);
+        throw new OutOfSpaceException(position, limit, length, e);
       }
     }
 
@@ -1604,13 +1592,6 @@ public abstract class CodedOutputStream extends ByteOutput {
     }
 
     @Override
-    void writeMessage(final int fieldNumber, final MessageLite value, Schema schema)
-        throws IOException {
-      writeTag(fieldNumber, WireFormat.WIRETYPE_LENGTH_DELIMITED);
-      writeMessageNoTag(value, schema);
-    }
-
-    @Override
     public void writeMessageSetExtension(final int fieldNumber, final MessageLite value)
         throws IOException {
       writeTag(WireFormat.MESSAGE_SET_ITEM, WireFormat.WIRETYPE_START_GROUP);
@@ -1635,17 +1616,11 @@ public abstract class CodedOutputStream extends ByteOutput {
     }
 
     @Override
-    void writeMessageNoTag(final MessageLite value, Schema schema) throws IOException {
-      writeUInt32NoTag(((AbstractMessageLite) value).getSerializedSize(schema));
-      schema.writeTo(value, wrapper);
-    }
-
-    @Override
     public void write(byte value) throws IOException {
       try {
         buffer.put(value);
       } catch (BufferOverflowException e) {
-        throw new OutOfSpaceException(e);
+        throw new OutOfSpaceException(buffer.position(), buffer.limit(), 1, e);
       }
     }
 
@@ -1690,7 +1665,7 @@ public abstract class CodedOutputStream extends ByteOutput {
             buffer.put((byte) value);
             return;
           } else {
-            buffer.put((byte) ((value | 0x80) & 0xFF));
+            buffer.put((byte) (value | 0x80));
             value >>>= 7;
           }
         }
@@ -1704,7 +1679,7 @@ public abstract class CodedOutputStream extends ByteOutput {
       try {
         buffer.putInt(value);
       } catch (BufferOverflowException e) {
-        throw new OutOfSpaceException(e);
+        throw new OutOfSpaceException(buffer.position(), buffer.limit(), FIXED32_SIZE, e);
       }
     }
 
@@ -1716,7 +1691,7 @@ public abstract class CodedOutputStream extends ByteOutput {
             buffer.put((byte) value);
             return;
           } else {
-            buffer.put((byte) (((int) value | 0x80) & 0xFF));
+            buffer.put((byte) ((int) value | 0x80));
             value >>>= 7;
           }
         }
@@ -1730,7 +1705,7 @@ public abstract class CodedOutputStream extends ByteOutput {
       try {
         buffer.putLong(value);
       } catch (BufferOverflowException e) {
-        throw new OutOfSpaceException(e);
+        throw new OutOfSpaceException(buffer.position(), buffer.limit(), FIXED64_SIZE, e);
       }
     }
 
@@ -1937,12 +1912,6 @@ public abstract class CodedOutputStream extends ByteOutput {
     }
 
     @Override
-    void writeMessage(int fieldNumber, MessageLite value, Schema schema) throws IOException {
-      writeTag(fieldNumber, WireFormat.WIRETYPE_LENGTH_DELIMITED);
-      writeMessageNoTag(value, schema);
-    }
-
-    @Override
     public void writeMessageSetExtension(int fieldNumber, MessageLite value) throws IOException {
       writeTag(WireFormat.MESSAGE_SET_ITEM, WireFormat.WIRETYPE_START_GROUP);
       writeUInt32(WireFormat.MESSAGE_SET_TYPE_ID, fieldNumber);
@@ -1965,16 +1934,9 @@ public abstract class CodedOutputStream extends ByteOutput {
     }
 
     @Override
-    void writeMessageNoTag(MessageLite value, Schema schema) throws IOException {
-      writeUInt32NoTag(((AbstractMessageLite) value).getSerializedSize(schema));
-      schema.writeTo(value, wrapper);
-    }
-
-    @Override
     public void write(byte value) throws IOException {
       if (position >= limit) {
-        throw new OutOfSpaceException(
-            String.format("Pos: %d, limit: %d, len: %d", position, limit, 1));
+        throw new OutOfSpaceException(position, limit, 1);
       }
       UnsafeUtil.putByte(position++, value);
     }
@@ -2014,69 +1976,84 @@ public abstract class CodedOutputStream extends ByteOutput {
 
     @Override
     public void writeUInt32NoTag(int value) throws IOException {
+      long position = this.position; // Perf: hoist field to register to avoid load/stores.
       if (position <= oneVarintLimit) {
         // Optimization to avoid bounds checks on each iteration.
         while (true) {
           if ((value & ~0x7F) == 0) {
             UnsafeUtil.putByte(position++, (byte) value);
-            return;
+            break;
           } else {
-            UnsafeUtil.putByte(position++, (byte) ((value | 0x80) & 0xFF));
+            UnsafeUtil.putByte(position++, (byte) (value | 0x80));
             value >>>= 7;
           }
         }
       } else {
-        while (position < limit) {
+        while (true) {
+          if (position >= limit) {
+            throw new OutOfSpaceException(
+                String.format("Pos: %d, limit: %d, len: %d", position, limit, 1));
+          }
           if ((value & ~0x7F) == 0) {
             UnsafeUtil.putByte(position++, (byte) value);
-            return;
+            break;
           } else {
-            UnsafeUtil.putByte(position++, (byte) ((value | 0x80) & 0xFF));
+            UnsafeUtil.putByte(position++, (byte) (value | 0x80));
             value >>>= 7;
           }
         }
-        throw new OutOfSpaceException(
-            String.format("Pos: %d, limit: %d, len: %d", position, limit, 1));
       }
+      this.position = position; // Only update position if we stayed within the array bounds.
     }
 
     @Override
     public void writeFixed32NoTag(int value) throws IOException {
-      buffer.putInt(bufferPos(position), value);
+      try {
+        buffer.putInt(bufferPos(position), value);
+      } catch (IndexOutOfBoundsException e) {
+        throw new OutOfSpaceException(position, limit, FIXED32_SIZE, e);
+      }
       position += FIXED32_SIZE;
     }
 
     @Override
     public void writeUInt64NoTag(long value) throws IOException {
+      long position = this.position; // Perf: hoist field to register to avoid load/stores.
       if (position <= oneVarintLimit) {
         // Optimization to avoid bounds checks on each iteration.
         while (true) {
           if ((value & ~0x7FL) == 0) {
             UnsafeUtil.putByte(position++, (byte) value);
-            return;
+            break;
           } else {
-            UnsafeUtil.putByte(position++, (byte) (((int) value | 0x80) & 0xFF));
+            UnsafeUtil.putByte(position++, (byte) ((int) value | 0x80));
             value >>>= 7;
           }
         }
       } else {
-        while (position < limit) {
+        while (true) {
+          if (position >= limit) {
+            throw new OutOfSpaceException(position, limit, 1);
+          }
           if ((value & ~0x7FL) == 0) {
             UnsafeUtil.putByte(position++, (byte) value);
-            return;
+            break;
           } else {
-            UnsafeUtil.putByte(position++, (byte) (((int) value | 0x80) & 0xFF));
+            UnsafeUtil.putByte(position++, (byte) ((int) value | 0x80));
             value >>>= 7;
           }
         }
-        throw new OutOfSpaceException(
-            String.format("Pos: %d, limit: %d, len: %d", position, limit, 1));
       }
+      this.position = position; // Only update position if we stayed within the array bounds.
     }
 
     @Override
     public void writeFixed64NoTag(long value) throws IOException {
-      buffer.putLong(bufferPos(position), value);
+      try {
+        buffer.putLong(bufferPos(position), value);
+      } catch (IndexOutOfBoundsException e) {
+        throw new OutOfSpaceException(position, limit, FIXED64_SIZE, e);
+      }
       position += FIXED64_SIZE;
     }
 
@@ -2090,8 +2067,7 @@ public abstract class CodedOutputStream extends ByteOutput {
         if (value == null) {
           throw new NullPointerException("value");
         }
-        throw new OutOfSpaceException(
-            String.format("Pos: %d, limit: %d, len: %d", position, limit, length));
+        throw new OutOfSpaceException(position, limit, length);
       }
 
       UnsafeUtil.copyMemory(value, offset, position, length);
@@ -2228,7 +2204,10 @@ public abstract class CodedOutputStream extends ByteOutput {
      * responsibility of the caller.
      */
     final void buffer(byte value) {
-      buffer[position++] = value;
+      int position = this.position;
+      buffer[position] = value;
+      // Android optimisation: 1 fewer instruction codegen vs buffer[position++].
+      this.position = position + 1;
       totalBytesWritten++;
     }
 
@@ -2265,7 +2244,7 @@ public abstract class CodedOutputStream extends ByteOutput {
             UnsafeUtil.putByte(buffer, position++, (byte) value);
             break;
           } else {
-            UnsafeUtil.putByte(buffer, position++, (byte) ((value | 0x80) & 0xFF));
+            UnsafeUtil.putByte(buffer, position++, (byte) (value | 0x80));
             value >>>= 7;
           }
         }
@@ -2278,7 +2257,7 @@ public abstract class CodedOutputStream extends ByteOutput {
             totalBytesWritten++;
             return;
           } else {
-            buffer[position++] = (byte) ((value | 0x80) & 0xFF);
+            buffer[position++] = (byte) (value | 0x80);
             totalBytesWritten++;
             value >>>= 7;
           }
@@ -2298,7 +2277,7 @@ public abstract class CodedOutputStream extends ByteOutput {
             UnsafeUtil.putByte(buffer, position++, (byte) value);
             break;
           } else {
-            UnsafeUtil.putByte(buffer, position++, (byte) (((int) value | 0x80) & 0xFF));
+            UnsafeUtil.putByte(buffer, position++, (byte) ((int) value | 0x80));
             value >>>= 7;
           }
         }
@@ -2311,7 +2290,7 @@ public abstract class CodedOutputStream extends ByteOutput {
             totalBytesWritten++;
             return;
           } else {
-            buffer[position++] = (byte) (((int) value | 0x80) & 0xFF);
+            buffer[position++] = (byte) ((int) value | 0x80);
             totalBytesWritten++;
             value >>>= 7;
           }
@@ -2324,10 +2303,12 @@ public abstract class CodedOutputStream extends ByteOutput {
      * responsibility of the caller.
      */
     final void bufferFixed32NoTag(int value) {
-      buffer[position++] = (byte) (value & 0xFF);
-      buffer[position++] = (byte) ((value >> 8) & 0xFF);
-      buffer[position++] = (byte) ((value >> 16) & 0xFF);
-      buffer[position++] = (byte) ((value >> 24) & 0xFF);
+      int position = this.position; // Perf: hoist field to register to avoid load/stores.
+      buffer[position++] = (byte) value;
+      buffer[position++] = (byte) (value >> 8);
+      buffer[position++] = (byte) (value >> 16);
+      buffer[position++] = (byte) (value >> 24);
+      this.position = position;
       totalBytesWritten += FIXED32_SIZE;
     }
 
@@ -2336,14 +2317,16 @@ public abstract class CodedOutputStream extends ByteOutput {
      * responsibility of the caller.
      */
     final void bufferFixed64NoTag(long value) {
-      buffer[position++] = (byte) (value & 0xFF);
-      buffer[position++] = (byte) ((value >> 8) & 0xFF);
-      buffer[position++] = (byte) ((value >> 16) & 0xFF);
-      buffer[position++] = (byte) ((value >> 24) & 0xFF);
-      buffer[position++] = (byte) ((int) (value >> 32) & 0xFF);
-      buffer[position++] = (byte) ((int) (value >> 40) & 0xFF);
-      buffer[position++] = (byte) ((int) (value >> 48) & 0xFF);
-      buffer[position++] = (byte) ((int) (value >> 56) & 0xFF);
+      int position = this.position; // Perf: hoist field to register to avoid load/stores.
+      buffer[position++] = (byte) value;
+      buffer[position++] = (byte) (value >> 8);
+      buffer[position++] = (byte) (value >> 16);
+      buffer[position++] = (byte) (value >> 24);
+      buffer[position++] = (byte) (value >> 32);
+      buffer[position++] = (byte) (value >> 40);
+      buffer[position++] = (byte) (value >> 48);
+      buffer[position++] = (byte) (value >> 56);
+      this.position = position;
       totalBytesWritten += FIXED64_SIZE;
     }
   }
@@ -2473,13 +2456,6 @@ public abstract class CodedOutputStream extends ByteOutput {
     }
 
     @Override
-    void writeMessage(final int fieldNumber, final MessageLite value, Schema schema)
-        throws IOException {
-      writeTag(fieldNumber, WireFormat.WIRETYPE_LENGTH_DELIMITED);
-      writeMessageNoTag(value, schema);
-    }
-
-    @Override
     public void writeMessageSetExtension(final int fieldNumber, final MessageLite value)
         throws IOException {
       writeTag(WireFormat.MESSAGE_SET_ITEM, WireFormat.WIRETYPE_START_GROUP);
@@ -2501,12 +2477,6 @@ public abstract class CodedOutputStream extends ByteOutput {
     public void writeMessageNoTag(final MessageLite value) throws IOException {
       writeUInt32NoTag(value.getSerializedSize());
       value.writeTo(this);
-    }
-
-    @Override
-    void writeMessageNoTag(final MessageLite value, Schema schema) throws IOException {
-      writeUInt32NoTag(((AbstractMessageLite) value).getSerializedSize(schema));
-      schema.writeTo(value, wrapper);
     }
 
     @Override
@@ -2787,13 +2757,6 @@ public abstract class CodedOutputStream extends ByteOutput {
     }
 
     @Override
-    void writeMessage(final int fieldNumber, final MessageLite value, Schema schema)
-        throws IOException {
-      writeTag(fieldNumber, WireFormat.WIRETYPE_LENGTH_DELIMITED);
-      writeMessageNoTag(value, schema);
-    }
-
-    @Override
     public void writeMessageSetExtension(final int fieldNumber, final MessageLite value)
         throws IOException {
       writeTag(WireFormat.MESSAGE_SET_ITEM, WireFormat.WIRETYPE_START_GROUP);
@@ -2815,12 +2778,6 @@ public abstract class CodedOutputStream extends ByteOutput {
     public void writeMessageNoTag(final MessageLite value) throws IOException {
       writeUInt32NoTag(value.getSerializedSize());
       value.writeTo(this);
-    }
-
-    @Override
-    void writeMessageNoTag(final MessageLite value, Schema schema) throws IOException {
-      writeUInt32NoTag(((AbstractMessageLite) value).getSerializedSize(schema));
-      schema.writeTo(value, wrapper);
     }
 
     @Override

@@ -13,6 +13,7 @@
 #include "upb/base/descriptor_constants.h"
 #include "upb/mem/arena.h"
 #include "upb/message/internal/map.h"
+#include "upb/message/internal/types.h"
 #include "upb/message/value.h"
 #include "upb/mini_table/field.h"
 #include "upb/mini_table/message.h"
@@ -39,6 +40,12 @@ UPB_API size_t upb_Map_Size(const upb_Map* map);
 UPB_API bool upb_Map_Get(const upb_Map* map, upb_MessageValue key,
                          upb_MessageValue* val);
 
+// Returns a mutable pointer to the value for the given key. Returns NULL if the
+// key is not present.
+// This function is only legal to call for maps that contain messages.
+UPB_API struct upb_Message* upb_Map_GetMutable(upb_Map* map,
+                                               upb_MessageValue key);
+
 // Removes all entries in the map.
 UPB_API void upb_Map_Clear(upb_Map* map);
 
@@ -62,12 +69,6 @@ UPB_API_INLINE bool upb_Map_Set(upb_Map* map, upb_MessageValue key,
 // If present and |val| is non-NULL, stores the deleted value.
 UPB_API bool upb_Map_Delete(upb_Map* map, upb_MessageValue key,
                             upb_MessageValue* val);
-
-// (DEPRECATED and going away soon. Do not use.)
-UPB_INLINE bool upb_Map_Delete2(upb_Map* map, upb_MessageValue key,
-                                upb_MessageValue* val) {
-  return upb_Map_Delete(map, key, val);
-}
 
 // Map iteration:
 //
@@ -118,9 +119,7 @@ UPB_API upb_MessageValue upb_MapIterator_Value(const upb_Map* map, size_t iter);
 UPB_API void upb_Map_Freeze(upb_Map* map, const upb_MiniTable* m);
 
 // Returns whether a map has been frozen.
-UPB_API_INLINE bool upb_Map_IsFrozen(const upb_Map* map) {
-  return UPB_PRIVATE(_upb_Map_IsFrozen)(map);
-}
+UPB_API_INLINE bool upb_Map_IsFrozen(const upb_Map* map);
 
 #ifdef __cplusplus
 } /* extern "C" */

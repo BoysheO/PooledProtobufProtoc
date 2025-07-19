@@ -29,6 +29,9 @@ from google.protobuf.internal import more_messages_pb2
 from google.protobuf.internal import no_package_pb2
 from google.protobuf.internal import testing_refleaks
 
+from google.protobuf import duration_pb2
+from google.protobuf import struct_pb2
+from google.protobuf import timestamp_pb2
 from google.protobuf import unittest_features_pb2
 from google.protobuf import unittest_import_pb2
 from google.protobuf import unittest_import_public_pb2
@@ -94,7 +97,7 @@ class DescriptorPoolTestBase(object):
                      file_desc4.name)
 
     file_desc5 = self.pool.FindFileContainingSymbol(
-        'protobuf_unittest.TestService')
+        'proto2_unittest.TestService')
     self.assertIsInstance(file_desc5, descriptor.FileDescriptor)
     self.assertEqual('google/protobuf/unittest.proto',
                      file_desc5.name)
@@ -104,7 +107,7 @@ class DescriptorPoolTestBase(object):
     assert descriptor_pool.Default().FindFileContainingSymbol(
         'google.protobuf.python.internal.another_field')
     assert descriptor_pool.Default().FindFileContainingSymbol(
-        'protobuf_unittest.TestService')
+        'proto2_unittest.TestService')
 
     # Can find field.
     file_desc6 = self.pool.FindFileContainingSymbol(
@@ -122,7 +125,7 @@ class DescriptorPoolTestBase(object):
 
     # Can find nested Enum value.
     file_desc8 = self.pool.FindFileContainingSymbol(
-        'protobuf_unittest.TestAllTypes.FOO')
+        'proto2_unittest.TestAllTypes.FOO')
     self.assertIsInstance(file_desc8, descriptor.FileDescriptor)
     self.assertEqual('google/protobuf/unittest.proto',
                      file_desc8.name)
@@ -170,11 +173,11 @@ class DescriptorPoolTestBase(object):
 
   def testCrossFileServicesByName(self):
     descriptor_pool_test1_pb2.DESCRIPTOR.services_by_name[
-        'DescriporPoolTestService'
+        'DescriptorPoolTestService'
     ],
     with self.assertRaises(KeyError):
       descriptor_pool_test2_pb2.DESCRIPTOR.services_by_name[
-          'DescriporPoolTestService'
+          'DescriptorPoolTestService'
       ]
 
   def testFindFileContainingSymbolFailure(self):
@@ -326,7 +329,7 @@ class DescriptorPoolTestBase(object):
     field = self.pool.FindFieldByName(
         'google.protobuf.python.internal.Factory1Message.list_value')
     self.assertEqual(field.name, 'list_value')
-    self.assertEqual(field.label, field.LABEL_REPEATED)
+    self.assertTrue(field.is_repeated)
     self.assertFalse(field.has_options)
 
     with self.assertRaises(KeyError):
@@ -401,15 +404,15 @@ class DescriptorPoolTestBase(object):
           'google.protobuf.python.internal.Factory1Message.list_value')
 
   def testFindService(self):
-    service = self.pool.FindServiceByName('protobuf_unittest.TestService')
-    self.assertEqual(service.full_name, 'protobuf_unittest.TestService')
+    service = self.pool.FindServiceByName('proto2_unittest.TestService')
+    self.assertEqual(service.full_name, 'proto2_unittest.TestService')
     with self.assertRaises(KeyError):
       self.pool.FindServiceByName('Does not exist')
 
-    method = self.pool.FindMethodByName('protobuf_unittest.TestService.Foo')
+    method = self.pool.FindMethodByName('proto2_unittest.TestService.Foo')
     self.assertIs(method.containing_service, service)
     with self.assertRaises(KeyError):
-      self.pool.FindMethodByName('protobuf_unittest.TestService.Doesnotexist')
+      self.pool.FindMethodByName('proto2_unittest.TestService.Doesnotexist')
 
   def testUserDefinedDB(self):
     db = descriptor_database.DescriptorDatabase()
@@ -435,6 +438,9 @@ class DescriptorPoolTestBase(object):
     self.assertEqual(file2.name,
                      'google/protobuf/internal/factory_test2.proto')
     self.testFindMessageTypeByName()
+    self.pool.AddSerializedFile(timestamp_pb2.DESCRIPTOR.serialized_pb)
+    self.pool.AddSerializedFile(duration_pb2.DESCRIPTOR.serialized_pb)
+    self.pool.AddSerializedFile(struct_pb2.DESCRIPTOR.serialized_pb)
     file_json = self.pool.AddSerializedFile(
         more_messages_pb2.DESCRIPTOR.serialized_pb)
     field = file_json.message_types_by_name['class'].fields_by_name['int_field']
@@ -519,7 +525,7 @@ class DescriptorPoolTestBase(object):
         unittest_import_pb2.DESCRIPTOR.serialized_pb))
     pool.Add(descriptor_pb2.FileDescriptorProto.FromString(
         unittest_pb2.DESCRIPTOR.serialized_pb))
-    message_class = message_factory.MessageFactory(pool).GetPrototype(
+    message_class = message_factory.GetMessageClass(
         pool.FindMessageTypeByName(
             unittest_pb2.TestAllTypes.DESCRIPTOR.full_name))
     _CheckDefaultValues(message_class())
@@ -542,12 +548,22 @@ class DescriptorPoolTestBase(object):
         # that uses a DescriptorDatabase.
         # TODO: Fix python and cpp extension diff.
         return
+    timestamp_desc = descriptor_pb2.FileDescriptorProto.FromString(
+        timestamp_pb2.DESCRIPTOR.serialized_pb)
+    duration_desc = descriptor_pb2.FileDescriptorProto.FromString(
+        duration_pb2.DESCRIPTOR.serialized_pb)
+    struct_desc = descriptor_pb2.FileDescriptorProto.FromString(
+        struct_pb2.DESCRIPTOR.serialized_pb
+    )
     more_messages_desc = descriptor_pb2.FileDescriptorProto.FromString(
         more_messages_pb2.DESCRIPTOR.serialized_pb)
     test1_desc = descriptor_pb2.FileDescriptorProto.FromString(
         descriptor_pool_test1_pb2.DESCRIPTOR.serialized_pb)
     test2_desc = descriptor_pb2.FileDescriptorProto.FromString(
         descriptor_pool_test2_pb2.DESCRIPTOR.serialized_pb)
+    self.pool.Add(timestamp_desc)
+    self.pool.Add(duration_desc)
+    self.pool.Add(struct_desc)
     self.pool.Add(more_messages_desc)
     self.pool.Add(test1_desc)
     self.pool.Add(test2_desc)
@@ -637,24 +653,24 @@ class DefaultDescriptorPoolTest(DescriptorPoolTestBase, unittest.TestCase):
         self.pool.FindFileByName('google/protobuf/unittest.proto'),
         unittest_pb2.DESCRIPTOR)
     self.assertIs(
-        self.pool.FindMessageTypeByName('protobuf_unittest.TestAllTypes'),
+        self.pool.FindMessageTypeByName('proto2_unittest.TestAllTypes'),
         unittest_pb2.TestAllTypes.DESCRIPTOR)
     self.assertIs(
         self.pool.FindFieldByName(
-            'protobuf_unittest.TestAllTypes.optional_int32'),
+            'proto2_unittest.TestAllTypes.optional_int32'),
         unittest_pb2.TestAllTypes.DESCRIPTOR.fields_by_name['optional_int32'])
     self.assertIs(
-        self.pool.FindEnumTypeByName('protobuf_unittest.ForeignEnum'),
+        self.pool.FindEnumTypeByName('proto2_unittest.ForeignEnum'),
         unittest_pb2.ForeignEnum.DESCRIPTOR)
     self.assertIs(
         self.pool.FindExtensionByName(
-            'protobuf_unittest.optional_int32_extension'),
+            'proto2_unittest.optional_int32_extension'),
         unittest_pb2.DESCRIPTOR.extensions_by_name['optional_int32_extension'])
     self.assertIs(
-        self.pool.FindOneofByName('protobuf_unittest.TestAllTypes.oneof_field'),
+        self.pool.FindOneofByName('proto2_unittest.TestAllTypes.oneof_field'),
         unittest_pb2.TestAllTypes.DESCRIPTOR.oneofs_by_name['oneof_field'])
     self.assertIs(
-        self.pool.FindServiceByName('protobuf_unittest.TestService'),
+        self.pool.FindServiceByName('proto2_unittest.TestService'),
         unittest_pb2.DESCRIPTOR.services_by_name['TestService'])
 
 
@@ -702,6 +718,87 @@ class SecondaryDescriptorFromDescriptorDB(DescriptorPoolTestBase,
         no_package_pb2.DESCRIPTOR.serialized_pb))
     self.pool = descriptor_pool.DescriptorPool(descriptor_db=self.db)
 
+  # TODO: b/387527786 - This is a helper function for testErrorCollector to
+  # capture some of the nonconformant, C++-specific behavior.
+  def assertCppErrorCollectorCorrect(self):
+    self.assertEqual(api_implementation.Type(), 'cpp')
+    error_msg = (
+        'Invalid proto descriptor for file "error_file":\\n  '
+        'collector.ErrorMessage.nested_message_field: "SubMessage" '
+        'is not defined.\\n  collector.ErrorMessage.MyOneof: Oneof '
+        "must have at least one field.\\n'"
+    )
+    with self.assertRaises(KeyError) as exc:
+      self.pool.FindMessageTypeByName('collector.ErrorMessage')
+    self.assertEqual(
+        str(exc.exception),
+        "'Couldn\\'t build file for message collector.ErrorMessage\\n"
+        + error_msg,
+    )
+
+    with self.assertRaises(KeyError) as exc:
+      self.pool.FindFieldByName('collector.ErrorMessage.nested_message_field')
+    self.assertEqual(
+        str(exc.exception),
+        "'Couldn\\'t build file for field"
+        ' collector.ErrorMessage.nested_message_field\\n'
+        + error_msg,
+    )
+
+    with self.assertRaises(KeyError) as exc:
+      self.pool.FindEnumTypeByName('collector.MyEnum')
+    self.assertEqual(
+        str(exc.exception),
+        "'Couldn\\'t build file for enum collector.MyEnum\\n" + error_msg,
+    )
+
+    with self.assertRaises(KeyError) as exc:
+      self.pool.FindFileContainingSymbol('collector.MyEnumValue')
+    self.assertEqual(
+        str(exc.exception),
+        "'Couldn\\'t build file for symbol collector.MyEnumValue\\n"
+        + error_msg,
+    )
+
+    with self.assertRaises(KeyError) as exc:
+      self.pool.FindOneofByName('collector.ErrorMessage.MyOneof')
+    self.assertEqual(
+        str(exc.exception),
+        "'Couldn\\'t build file for oneof collector.ErrorMessage.MyOneof\\n"
+        + error_msg,
+    )
+
+  # TODO: b/387527786 - This is a helper function for testErrorCollector to
+  # capture some of the nonconformant, UPB-specific behavior.
+  def assertUpbErrorCollectorCorrect(self):
+    self.assertEqual(api_implementation.Type(), 'upb')
+    # Nonconformance: compared with C++, UPB will have less descriptive
+    # error messages, and raise TypeError instead of KeyError.
+    error_msg = (
+        "Couldn't build proto file into descriptor pool: "
+        "couldn't resolve name 'SubMessage'"
+    )
+
+    with self.assertRaises(TypeError) as exc:
+      self.pool.FindMessageTypeByName('collector.ErrorMessage')
+    self.assertEqual(str(exc.exception), error_msg)
+
+    with self.assertRaises(TypeError) as exc:
+      self.pool.FindFieldByName('collector.ErrorMessage.nested_message_field')
+    self.assertEqual(str(exc.exception), error_msg)
+
+    with self.assertRaises(TypeError) as exc:
+      self.pool.FindEnumTypeByName('collector.MyEnum')
+    self.assertEqual(str(exc.exception), error_msg)
+
+    with self.assertRaises(TypeError) as exc:
+      self.pool.FindFileContainingSymbol('collector.MyEnumValue')
+    self.assertEqual(str(exc.exception), error_msg)
+
+    with self.assertRaises(TypeError) as exc:
+      self.pool.FindOneofByName('collector.ErrorMessage.MyOneof')
+    self.assertEqual(str(exc.exception), error_msg)
+
   def testErrorCollector(self):
     file_proto = descriptor_pb2.FileDescriptorProto()
     file_proto.package = 'collector'
@@ -723,11 +820,20 @@ class SecondaryDescriptorFromDescriptorDB(DescriptorPoolTestBase,
     enum_value.number = 0
     self.db.Add(file_proto)
 
-    self.assertRaisesRegex(KeyError, 'SubMessage',
-                           self.pool.FindMessageTypeByName,
-                           'collector.ErrorMessage')
-    self.assertRaisesRegex(KeyError, 'SubMessage', self.pool.FindFileByName,
-                           'error_file')
+    # Nonconformance: UPB will raise a TypeError whereas other implementations
+    # will raise KeyError when SubMessage cannot be indexed.
+    # TODO: b/387527786 - Fix this nonconformance between (cpp+python)/upb.
+    error_type = TypeError if api_implementation.Type() == 'upb' else KeyError
+    self.assertRaisesRegex(
+        error_type,
+        'SubMessage',
+        self.pool.FindMessageTypeByName,
+        'collector.ErrorMessage',
+    )
+    self.assertRaisesRegex(
+        error_type, 'SubMessage', self.pool.FindFileByName, 'error_file'
+    )
+
     with self.assertRaises(KeyError) as exc:
       self.pool.FindFileByName('none_file')
     self.assertIn(str(exc.exception), ('\'none_file\'',
@@ -739,36 +845,12 @@ class SecondaryDescriptorFromDescriptorDB(DescriptorPoolTestBase,
     # called the first time, a KeyError will be raised but call the find
     # method later will return a descriptor which is not build.
     # TODO: fix pure python to revert the load if file can not be build
+    # TODO: b/387527786 - Fix this nonconformance between python/cpp/upb.
     if api_implementation.Type() != 'python':
-      error_msg = ('Invalid proto descriptor for file "error_file":\\n  '
-                   'collector.ErrorMessage.nested_message_field: "SubMessage" '
-                   'is not defined.\\n  collector.ErrorMessage.MyOneof: Oneof '
-                   'must have at least one field.\\n\'')
-      with self.assertRaises(KeyError) as exc:
-        self.pool.FindMessageTypeByName('collector.ErrorMessage')
-      self.assertEqual(str(exc.exception), '\'Couldn\\\'t build file for '
-                       'message collector.ErrorMessage\\n' + error_msg)
-
-      with self.assertRaises(KeyError) as exc:
-        self.pool.FindFieldByName('collector.ErrorMessage.nested_message_field')
-      self.assertEqual(str(exc.exception), '\'Couldn\\\'t build file for field'
-                       ' collector.ErrorMessage.nested_message_field\\n'
-                       + error_msg)
-
-      with self.assertRaises(KeyError) as exc:
-        self.pool.FindEnumTypeByName('collector.MyEnum')
-      self.assertEqual(str(exc.exception), '\'Couldn\\\'t build file for enum'
-                       ' collector.MyEnum\\n' + error_msg)
-
-      with self.assertRaises(KeyError) as exc:
-        self.pool.FindFileContainingSymbol('collector.MyEnumValue')
-      self.assertEqual(str(exc.exception), '\'Couldn\\\'t build file for symbol'
-                       ' collector.MyEnumValue\\n' + error_msg)
-
-      with self.assertRaises(KeyError) as exc:
-        self.pool.FindOneofByName('collector.ErrorMessage.MyOneof')
-      self.assertEqual(str(exc.exception), '\'Couldn\\\'t build file for oneof'
-                       ' collector.ErrorMessage.MyOneof\\n' + error_msg)
+      if api_implementation.Type() == 'cpp':
+        self.assertCppErrorCollectorCorrect()
+      else:
+        self.assertUpbErrorCollectorCorrect()
 
 
 class ProtoFile(object):
@@ -949,20 +1031,20 @@ class AddDescriptorTest(unittest.TestCase):
     pool = descriptor_pool.DescriptorPool()
     pool._AddDescriptor(unittest_pb2.TestAllTypes.DESCRIPTOR)
     self.assertEqual(
-        'protobuf_unittest.TestAllTypes',
+        'proto2_unittest.TestAllTypes',
         pool.FindMessageTypeByName(
-            prefix + 'protobuf_unittest.TestAllTypes').full_name)
+            prefix + 'proto2_unittest.TestAllTypes').full_name)
 
     # AddDescriptor is not recursive.
     with self.assertRaises(KeyError):
       pool.FindMessageTypeByName(
-          prefix + 'protobuf_unittest.TestAllTypes.NestedMessage')
+          prefix + 'proto2_unittest.TestAllTypes.NestedMessage')
 
     pool._AddDescriptor(unittest_pb2.TestAllTypes.NestedMessage.DESCRIPTOR)
     self.assertEqual(
-        'protobuf_unittest.TestAllTypes.NestedMessage',
+        'proto2_unittest.TestAllTypes.NestedMessage',
         pool.FindMessageTypeByName(
-            prefix + 'protobuf_unittest.TestAllTypes.NestedMessage').full_name)
+            prefix + 'proto2_unittest.TestAllTypes.NestedMessage').full_name)
 
     # Files are implicitly also indexed when messages are added.
     self.assertEqual(
@@ -973,7 +1055,7 @@ class AddDescriptorTest(unittest.TestCase):
     self.assertEqual(
         'google/protobuf/unittest.proto',
         pool.FindFileContainingSymbol(
-            prefix + 'protobuf_unittest.TestAllTypes.NestedMessage').name)
+            prefix + 'proto2_unittest.TestAllTypes.NestedMessage').name)
 
   @unittest.skipIf(api_implementation.Type() != 'python',
                    'Only pure python allows _Add*()')
@@ -987,19 +1069,19 @@ class AddDescriptorTest(unittest.TestCase):
     pool.AddSerializedFile(unittest_import_pb2.DESCRIPTOR.serialized_pb)
     pool.AddSerializedFile(unittest_pb2.DESCRIPTOR.serialized_pb)
     self.assertEqual(
-        'protobuf_unittest.ForeignEnum',
+        'proto2_unittest.ForeignEnum',
         pool.FindEnumTypeByName(
-            prefix + 'protobuf_unittest.ForeignEnum').full_name)
+            prefix + 'proto2_unittest.ForeignEnum').full_name)
 
     # AddEnumDescriptor is not recursive.
     with self.assertRaises(KeyError):
       pool.FindEnumTypeByName(
-          prefix + 'protobuf_unittest.ForeignEnum.NestedEnum')
+          prefix + 'proto2_unittest.ForeignEnum.NestedEnum')
 
     self.assertEqual(
-        'protobuf_unittest.TestAllTypes.NestedEnum',
+        'proto2_unittest.TestAllTypes.NestedEnum',
         pool.FindEnumTypeByName(
-            prefix + 'protobuf_unittest.TestAllTypes.NestedEnum').full_name)
+            prefix + 'proto2_unittest.TestAllTypes.NestedEnum').full_name)
 
     # Files are implicitly also indexed when enums are added.
     self.assertEqual(
@@ -1010,7 +1092,7 @@ class AddDescriptorTest(unittest.TestCase):
     self.assertEqual(
         'google/protobuf/unittest.proto',
         pool.FindFileContainingSymbol(
-            prefix + 'protobuf_unittest.TestAllTypes.NestedEnum').name)
+            prefix + 'proto2_unittest.TestAllTypes.NestedEnum').name)
 
   @unittest.skipIf(api_implementation.Type() != 'python',
                    'Only pure python allows _Add*()')
@@ -1023,11 +1105,11 @@ class AddDescriptorTest(unittest.TestCase):
   def testService(self):
     pool = descriptor_pool.DescriptorPool()
     with self.assertRaises(KeyError):
-      pool.FindServiceByName('protobuf_unittest.TestService')
+      pool.FindServiceByName('proto2_unittest.TestService')
     pool._AddServiceDescriptor(unittest_pb2._TESTSERVICE)
     self.assertEqual(
-        'protobuf_unittest.TestService',
-        pool.FindServiceByName('protobuf_unittest.TestService').full_name)
+        'proto2_unittest.TestService',
+        pool.FindServiceByName('proto2_unittest.TestService').full_name)
 
   @unittest.skipIf(api_implementation.Type() != 'python',
                    'Only pure python allows _Add*()')
@@ -1043,7 +1125,7 @@ class AddDescriptorTest(unittest.TestCase):
     # be explicitly registered.
     with self.assertRaises(KeyError):
       pool.FindFileContainingSymbol(
-          'protobuf_unittest.TestAllTypes')
+          'proto2_unittest.TestAllTypes')
 
   def testEmptyDescriptorPool(self):
     # Check that an empty DescriptorPool() contains no messages.
@@ -1131,26 +1213,60 @@ class FeatureSetDefaults(unittest.TestCase):
         file._GetFeatures().HasExtension(unittest_features_pb2.test)
     )
 
+  def testMergedDefaults(self):
+    pool = descriptor_pool.DescriptorPool()
+    fixed = descriptor_pb2.FeatureSet()
+    fixed.CopyFrom(unittest_features_pb2.DESCRIPTOR._GetFeatures())
+    fixed.field_presence = descriptor_pb2.FeatureSet.IMPLICIT
+    fixed.ClearField('message_encoding')
+    defaults = descriptor_pb2.FeatureSetDefaults(
+        defaults=[
+            descriptor_pb2.FeatureSetDefaults.FeatureSetEditionDefault(
+                edition=descriptor_pb2.Edition.EDITION_PROTO2,
+                fixed_features=fixed,
+                overridable_features=descriptor_pb2.FeatureSet(
+                    message_encoding=descriptor_pb2.FeatureSet.DELIMITED
+                ),
+            )
+        ],
+        minimum_edition=descriptor_pb2.Edition.EDITION_PROTO2,
+        maximum_edition=descriptor_pb2.Edition.EDITION_2023,
+    )
+    pool.SetFeatureSetDefaults(defaults)
+    file_desc = descriptor_pb2.FileDescriptorProto(name='some/file.proto')
+    file = pool.AddSerializedFile(file_desc.SerializeToString())
+    self.assertEqual(
+        file._GetFeatures().message_encoding,
+        descriptor_pb2.FeatureSet.DELIMITED,
+    )
+    self.assertEqual(
+        file._GetFeatures().field_presence, descriptor_pb2.FeatureSet.IMPLICIT
+    )
+
   def testOverride(self):
     pool = descriptor_pool.DescriptorPool()
     defaults = descriptor_pb2.FeatureSetDefaults(
         defaults=[
             descriptor_pb2.FeatureSetDefaults.FeatureSetEditionDefault(
                 edition=descriptor_pb2.Edition.EDITION_PROTO2,
-                features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
+                overridable_features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
             )
         ],
         minimum_edition=descriptor_pb2.Edition.EDITION_PROTO2,
         maximum_edition=descriptor_pb2.Edition.EDITION_2023,
     )
-    defaults.defaults[0].features.Extensions[
+    defaults.defaults[0].overridable_features.Extensions[
         unittest_features_pb2.test
-    ].int_file_feature = 9
+    ].file_feature = unittest_features_pb2.VALUE9
     pool.SetFeatureSetDefaults(defaults)
     file_desc = descriptor_pb2.FileDescriptorProto(name='some/file.proto')
     file = pool.AddSerializedFile(file_desc.SerializeToString())
     self.assertTrue(
         file._GetFeatures().HasExtension(unittest_features_pb2.test)
+    )
+    self.assertEqual(
+        file._GetFeatures().Extensions[unittest_features_pb2.test].file_feature,
+        unittest_features_pb2.VALUE9,
     )
 
   def testInvalidType(self):
@@ -1173,7 +1289,7 @@ class FeatureSetDefaults(unittest.TestCase):
               defaults=[
                   descriptor_pb2.FeatureSetDefaults.FeatureSetEditionDefault(
                       edition=descriptor_pb2.Edition.EDITION_PROTO2,
-                      features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
+                      overridable_features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
                   )
               ],
               minimum_edition=descriptor_pb2.Edition.EDITION_2023,
@@ -1193,11 +1309,11 @@ class FeatureSetDefaults(unittest.TestCase):
               defaults=[
                   descriptor_pb2.FeatureSetDefaults.FeatureSetEditionDefault(
                       edition=descriptor_pb2.Edition.EDITION_PROTO3,
-                      features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
+                      overridable_features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
                   ),
                   descriptor_pb2.FeatureSetDefaults.FeatureSetEditionDefault(
                       edition=descriptor_pb2.Edition.EDITION_PROTO2,
-                      features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
+                      overridable_features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
                   ),
               ],
               minimum_edition=descriptor_pb2.Edition.EDITION_PROTO2,
@@ -1213,11 +1329,11 @@ class FeatureSetDefaults(unittest.TestCase):
               defaults=[
                   descriptor_pb2.FeatureSetDefaults.FeatureSetEditionDefault(
                       edition=descriptor_pb2.Edition.EDITION_UNKNOWN,
-                      features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
+                      overridable_features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
                   ),
                   descriptor_pb2.FeatureSetDefaults.FeatureSetEditionDefault(
                       edition=descriptor_pb2.Edition.EDITION_PROTO2,
-                      features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
+                      overridable_features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
                   ),
               ],
               minimum_edition=descriptor_pb2.Edition.EDITION_PROTO2,
@@ -1234,7 +1350,7 @@ class FeatureSetDefaults(unittest.TestCase):
         defaults=[
             descriptor_pb2.FeatureSetDefaults.FeatureSetEditionDefault(
                 edition=descriptor_pb2.Edition.EDITION_PROTO2,
-                features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
+                overridable_features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
             )
         ],
         minimum_edition=descriptor_pb2.Edition.EDITION_PROTO2,
@@ -1248,7 +1364,7 @@ class FeatureSetDefaults(unittest.TestCase):
         defaults=[
             descriptor_pb2.FeatureSetDefaults.FeatureSetEditionDefault(
                 edition=descriptor_pb2.Edition.EDITION_PROTO2,
-                features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
+                overridable_features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
             )
         ],
         minimum_edition=descriptor_pb2.Edition.EDITION_PROTO2,
@@ -1263,7 +1379,7 @@ class FeatureSetDefaults(unittest.TestCase):
         defaults=[
             descriptor_pb2.FeatureSetDefaults.FeatureSetEditionDefault(
                 edition=descriptor_pb2.Edition.EDITION_2023,
-                features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
+                overridable_features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
             )
         ],
         minimum_edition=descriptor_pb2.Edition.EDITION_PROTO2,
@@ -1281,7 +1397,7 @@ class FeatureSetDefaults(unittest.TestCase):
         defaults=[
             descriptor_pb2.FeatureSetDefaults.FeatureSetEditionDefault(
                 edition=descriptor_pb2.Edition.EDITION_PROTO3,
-                features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
+                overridable_features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
             )
         ],
         minimum_edition=descriptor_pb2.Edition.EDITION_PROTO3,
@@ -1301,7 +1417,7 @@ class FeatureSetDefaults(unittest.TestCase):
         defaults=[
             descriptor_pb2.FeatureSetDefaults.FeatureSetEditionDefault(
                 edition=descriptor_pb2.Edition.EDITION_PROTO2,
-                features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
+                overridable_features=unittest_features_pb2.DESCRIPTOR._GetFeatures(),
             )
         ],
         minimum_edition=descriptor_pb2.Edition.EDITION_PROTO2,
@@ -1413,6 +1529,92 @@ TEST2_FILE = ProtoFile(
     ],
     public_dependencies=[
         'google/protobuf/internal/more_messages.proto'])
+
+
+class LocalFakeDB(descriptor_database.DescriptorDatabase):
+
+  def FindFileContainingExtension(self, extendee_name, extension_number):
+    return descriptor_pb2.FileDescriptorProto.FromString(
+        factory_test2_pb2.DESCRIPTOR.serialized_pb
+    )
+
+  def FindAllExtensionNumbers(self, extendee_name):
+    return [1001, 1002]
+
+
+class BadDB(descriptor_database.DescriptorDatabase):
+
+  def FindFileContainingExtension(self, extendee_name, extension_number):
+    raise RuntimeError('just ignore it')
+
+  def FindAllExtensionNumbers(self, extendee_name):
+    raise RuntimeError('just ignore it')
+
+
+class BadDB2(descriptor_database.DescriptorDatabase):
+
+  # Returns a none list value.
+  def FindAllExtensionNumbers(self, extendee_name):
+    return 1.2
+
+
+@testing_refleaks.TestCase
+class FallBackDBTest(unittest.TestCase):
+
+  def setUp(self):
+    self.factory_test1_fd = descriptor_pb2.FileDescriptorProto.FromString(
+        factory_test1_pb2.DESCRIPTOR.serialized_pb
+    )
+    factory_test2_fd = descriptor_pb2.FileDescriptorProto.FromString(
+        factory_test2_pb2.DESCRIPTOR.serialized_pb
+    )
+    db = LocalFakeDB()
+    db.Add(self.factory_test1_fd)
+    db.Add(factory_test2_fd)
+    self.pool = descriptor_pool.DescriptorPool(db)
+    file_desc = self.pool.FindFileByName(
+        'google/protobuf/internal/factory_test1.proto'
+    )
+    self.message_desc = file_desc.message_types_by_name['Factory1Message']
+
+    bad_db = BadDB()
+    bad_db.Add(self.factory_test1_fd)
+    self.bad_pool = descriptor_pool.DescriptorPool(bad_db)
+
+  def testFindExtensionByNumber(self):
+    ext = self.pool.FindExtensionByNumber(self.message_desc, 1001)
+    self.assertEqual(ext.name, 'one_more_field')
+
+  def testFindAllExtensions(self):
+    extensions = self.pool.FindAllExtensions(self.message_desc)
+    self.assertEqual(len(extensions), 2)
+
+  def testIgnoreBadFindExtensionByNumber(self):
+    file_desc = self.bad_pool.FindFileByName(
+        'google/protobuf/internal/factory_test1.proto'
+    )
+    message_desc = file_desc.message_types_by_name['Factory1Message']
+    with self.assertRaises(KeyError):
+      ext = self.bad_pool.FindExtensionByNumber(message_desc, 1001)
+
+  def testIgnoreBadFindAllExtensions(self):
+    file_desc = self.bad_pool.FindFileByName(
+        'google/protobuf/internal/factory_test1.proto'
+    )
+    message_desc = file_desc.message_types_by_name['Factory1Message']
+    extensions = self.bad_pool.FindAllExtensions(message_desc)
+    self.assertEqual(len(extensions), 0)
+
+  def testFindAllExtensionsReturnsNoneList(self):
+    db = BadDB2()
+    db.Add(self.factory_test1_fd)
+    pool = descriptor_pool.DescriptorPool(db)
+    file_desc = pool.FindFileByName(
+        'google/protobuf/internal/factory_test1.proto'
+    )
+    message_desc = file_desc.message_types_by_name['Factory1Message']
+    extensions = self.bad_pool.FindAllExtensions(message_desc)
+    self.assertEqual(len(extensions), 0)
 
 
 if __name__ == '__main__':

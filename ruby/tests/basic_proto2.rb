@@ -6,6 +6,7 @@ $LOAD_PATH.unshift(File.expand_path(File.dirname(__FILE__)))
 require 'basic_test_proto2_pb'
 require 'common_tests'
 require 'google/protobuf'
+require 'google/protobuf/descriptor_pb'
 require 'json'
 require 'test/unit'
 
@@ -42,6 +43,15 @@ module BasicTestProto2
 
       m = TestMessage.new(:optional_int32 => nil)
       refute m.has_optional_int32?
+      refute TestMessage.descriptor.lookup('optional_int32').has?(m)
+
+      m = TestMessage.new(:optional_int32 => 0)
+      assert m.has_optional_int32?
+      assert TestMessage.descriptor.lookup('optional_int32').has?(m)
+
+      m = TestMessage.decode(TestMessage.encode(m))
+      assert m.has_optional_int32?
+      assert TestMessage.descriptor.lookup('optional_int32').has?(m)
 
       assert_raises NoMethodError do
         m.has_repeated_msg?
@@ -346,6 +356,36 @@ module BasicTestProto2
       encoded_message = TestMessageSet.encode message
       decoded_message = TestMessageSet.decode encoded_message
       assert_equal message, decoded_message
+    end
+
+    def test_field_explicit_presence
+      descriptor = TestMessage.descriptor.lookup("optional_int32")
+      assert_true descriptor.has_presence?
+      assert_false descriptor.options.has_features?
+    end
+
+    def test_field_expanded_encoding
+      descriptor = TestMessage.descriptor.lookup("repeated_int32")
+      assert_false descriptor.is_packed?
+      assert_false descriptor.options.has_features?
+    end
+
+    def test_field_packed_encoding
+      descriptor = TestPackedMessage.descriptor.lookup("repeated_int32")
+      assert_true descriptor.is_packed?
+      assert_false descriptor.options.has_features?
+    end
+
+    def test_field_group_type
+      descriptor = TestGroupMessage.descriptor.lookup("groupfield")
+      assert_equal :group, descriptor.type
+      assert_false descriptor.options.has_features?
+    end
+
+    def test_field_required
+      descriptor = TestRequiredMessage.descriptor.lookup("required_int32")
+      assert_equal :required, descriptor.label
+      assert_false descriptor.options.has_features?
     end
   end
 end

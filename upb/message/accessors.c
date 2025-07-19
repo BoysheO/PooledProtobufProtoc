@@ -7,37 +7,30 @@
 
 #include "upb/message/accessors.h"
 
-#include <string.h>
-
 #include "upb/mem/arena.h"
 #include "upb/message/array.h"
 #include "upb/message/map.h"
 #include "upb/message/message.h"
 #include "upb/mini_table/field.h"
 #include "upb/mini_table/message.h"
-#include "upb/mini_table/sub.h"
 
 // Must be last.
 #include "upb/port/def.inc"
 
-bool upb_Message_SetMapEntry(upb_Map* map, const upb_MiniTable* mini_table,
+bool upb_Message_SetMapEntry(upb_Map* map, const upb_MiniTable* m,
                              const upb_MiniTableField* f,
                              upb_Message* map_entry_message, upb_Arena* arena) {
   UPB_ASSERT(!upb_Message_IsFrozen(map_entry_message));
-
-  // TODO: use a variant of upb_MiniTable_GetSubMessageTable() here.
-  const upb_MiniTable* map_entry_mini_table = upb_MiniTableSub_Message(
-      mini_table->UPB_PRIVATE(subs)[f->UPB_PRIVATE(submsg_index)]);
+  const upb_MiniTable* map_entry_mini_table =
+      upb_MiniTable_MapEntrySubMessage(m, f);
   UPB_ASSERT(map_entry_mini_table);
-  UPB_ASSERT(map_entry_mini_table->UPB_PRIVATE(field_count) == 2);
   const upb_MiniTableField* map_entry_key_field =
-      &map_entry_mini_table->UPB_PRIVATE(fields)[0];
+      upb_MiniTable_MapKey(map_entry_mini_table);
   const upb_MiniTableField* map_entry_value_field =
-      &map_entry_mini_table->UPB_PRIVATE(fields)[1];
+      upb_MiniTable_MapValue(map_entry_mini_table);
   // Map key/value cannot have explicit defaults,
   // hence assuming a zero default is valid.
-  upb_MessageValue default_val;
-  memset(&default_val, 0, sizeof(upb_MessageValue));
+  upb_MessageValue default_val = upb_MessageValue_Zero();
   upb_MessageValue map_entry_key =
       upb_Message_GetField(map_entry_message, map_entry_key_field, default_val);
   upb_MessageValue map_entry_value = upb_Message_GetField(

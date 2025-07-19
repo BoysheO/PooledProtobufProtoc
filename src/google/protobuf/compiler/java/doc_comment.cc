@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "absl/strings/str_split.h"
+#include "absl/strings/string_view.h"
 #include "google/protobuf/compiler/java/options.h"
 #include "google/protobuf/descriptor.h"
 #include "google/protobuf/descriptor.pb.h"
@@ -29,7 +30,7 @@ namespace protobuf {
 namespace compiler {
 namespace java {
 
-std::string EscapeJavadoc(const std::string& input) {
+std::string EscapeJavadoc(absl::string_view input) {
   std::string result;
   result.reserve(input.size() * 2);
 
@@ -87,7 +88,7 @@ std::string EscapeJavadoc(const std::string& input) {
   return result;
 }
 
-static std::string EscapeKdoc(const std::string& input) {
+static std::string EscapeKdoc(absl::string_view input) {
   std::string result;
   result.reserve(input.size() * 2);
 
@@ -126,6 +127,12 @@ static void WriteDocCommentBodyForLocation(io::Printer* printer,
                                            const SourceLocation& location,
                                            const Options options,
                                            const bool kdoc) {
+  if (options.strip_nonfunctional_codegen) {
+    // TODO: Remove once prototiller can avoid making
+    // extraneous formatting changes to comments.
+    return;
+  }
+
   std::string comments = location.leading_comments.empty()
                              ? location.trailing_comments
                              : location.leading_comments;
@@ -136,7 +143,7 @@ static void WriteDocCommentBodyForLocation(io::Printer* printer,
       comments = EscapeJavadoc(comments);
     }
 
-    std::vector<std::string> lines = absl::StrSplit(comments, "\n");
+    std::vector<std::string> lines = absl::StrSplit(comments, '\n');
     while (!lines.empty() && lines.back().empty()) {
       lines.pop_back();
     }
@@ -147,24 +154,20 @@ static void WriteDocCommentBodyForLocation(io::Printer* printer,
       printer->Print(" * <pre>\n");
     }
 
-    // TODO: Remove once prototiller can avoid making
-    // extraneous formatting changes to comments.
-    if (!options.strip_nonfunctional_codegen) {
-      for (size_t i = 0; i < lines.size(); i++) {
-        // Lines should start with a single space and any extraneous leading
-        // spaces should be stripped. For lines starting with a /, the leading
-        // space will prevent putting it right after the leading asterick from
-        // closing the comment.
-        std::string line = lines[i];
-        line.erase(line.begin(),
-                   std::find_if(line.begin(), line.end(), [](unsigned char ch) {
-                     return !std::isspace(ch);
-                   }));
-        if (!line.empty()) {
-          printer->Print(" * $line$\n", "line", line);
-        } else {
-          printer->Print(" *\n");
-        }
+    for (size_t i = 0; i < lines.size(); i++) {
+      // Lines should start with a single space and any extraneous leading
+      // spaces should be stripped. For lines starting with a /, the leading
+      // space will prevent putting it right after the leading asterisk from
+      // closing the comment.
+      std::string line = lines[i];
+      line.erase(line.begin(),
+                 std::find_if(line.begin(), line.end(), [](unsigned char ch) {
+                   return !std::isspace(ch);
+                 }));
+      if (!line.empty()) {
+        printer->Print(" * $line$\n", "line", line);
+      } else {
+        printer->Print(" *\n");
       }
     }
 
@@ -207,7 +210,7 @@ static void WriteDebugString(io::Printer* printer, const FieldDescriptor* field,
                              const Options options, const bool kdoc) {
   std::string field_comment = FirstLineOf(field->DebugString());
   if (options.strip_nonfunctional_codegen) {
-    field_comment = field->name();
+    field_comment = std::string(field->name());
   }
   if (kdoc) {
     printer->Print(" * `$def$`\n", "def", EscapeKdoc(field_comment));
@@ -255,12 +258,6 @@ void WriteDeprecatedJavadoc(io::Printer* printer, const FieldDescriptor* field,
     return;
   }
 
-  // Lite codegen does not annotate set & clear methods with @Deprecated.
-  if (field->file()->options().optimize_for() == FileOptions::LITE_RUNTIME &&
-      (type == SETTER || type == CLEARER)) {
-    return;
-  }
-
   std::string startLine = "0";
   SourceLocation location;
   if (field->GetSourceLocation(&location)) {
@@ -279,11 +276,13 @@ void WriteFieldAccessorDocComment(io::Printer* printer,
                                   const FieldDescriptor* field,
                                   const FieldAccessorType type,
                                   const Options options, const bool builder,
-                                  const bool kdoc) {
+                                  const bool kdoc, const bool is_private) {
   printer->Print("/**\n");
   WriteDocCommentBody(printer, field, options, kdoc);
   WriteDebugString(printer, field, options, kdoc);
-  if (!kdoc) WriteDeprecatedJavadoc(printer, field, type, options);
+  if (!kdoc && !is_private) {
+    WriteDeprecatedJavadoc(printer, field, type, options);
+  }
   switch (type) {
     case HAZZER:
       printer->Print(" * @return Whether the $name$ field is set.\n", "name",
@@ -339,11 +338,13 @@ void WriteFieldEnumValueAccessorDocComment(io::Printer* printer,
                                            const FieldAccessorType type,
                                            const Options options,
                                            const bool builder,
-                                           const bool kdoc) {
+                                           const bool is_private) {
   printer->Print("/**\n");
-  WriteDocCommentBody(printer, field, options, kdoc);
-  WriteDebugString(printer, field, options, kdoc);
-  if (!kdoc) WriteDeprecatedJavadoc(printer, field, type, options);
+  WriteDocCommentBody(printer, field, options, /* kdoc = */ false);
+  WriteDebugString(printer, field, options, /* kdoc = */ false);
+  if (!is_private) {
+    WriteDeprecatedJavadoc(printer, field, type, options);
+  }
   switch (type) {
     case HAZZER:
       // Should never happen
@@ -405,16 +406,16 @@ void WriteFieldEnumValueAccessorDocComment(io::Printer* printer,
   printer->Print(" */\n");
 }
 
-void WriteFieldStringBytesAccessorDocComment(io::Printer* printer,
-                                             const FieldDescriptor* field,
-                                             const FieldAccessorType type,
-                                             const Options options,
-                                             const bool builder,
-                                             const bool kdoc) {
+void WriteFieldStringBytesAccessorDocComment(
+    io::Printer* printer, const FieldDescriptor* field,
+    const FieldAccessorType type, const Options options, const bool builder,
+    const bool kdoc, const bool is_private) {
   printer->Print("/**\n");
   WriteDocCommentBody(printer, field, options, kdoc);
   WriteDebugString(printer, field, options, kdoc);
-  if (!kdoc) WriteDeprecatedJavadoc(printer, field, type, options);
+  if (!kdoc && !is_private) {
+    WriteDeprecatedJavadoc(printer, field, type, options);
+  }
   switch (type) {
     case HAZZER:
       // Should never happen

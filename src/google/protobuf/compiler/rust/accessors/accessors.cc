@@ -11,80 +11,80 @@
 
 #include "absl/log/absl_log.h"
 #include "google/protobuf/compiler/rust/accessors/accessor_case.h"
-#include "google/protobuf/compiler/rust/accessors/accessor_generator.h"
+#include "google/protobuf/compiler/rust/accessors/generator.h"
 #include "google/protobuf/compiler/rust/context.h"
+#include "google/protobuf/compiler/rust/rust_field_type.h"
 #include "google/protobuf/descriptor.h"
 #include "google/protobuf/descriptor.pb.h"
+#include "google/protobuf/port.h"
 
 namespace google {
 namespace protobuf {
 namespace compiler {
 namespace rust {
 
+bool IsSupportedField(Context& ctx, const FieldDescriptor& field) {
+  if (ctx.is_upb()) {
+    // All fields supported on upb kernel.
+    return true;
+  }
+
+  // TODO: We do not support repeated strings on C++ kernel if
+  // they are not string_view or string type.
+  if (field.is_repeated() &&
+      field.cpp_type() == FieldDescriptor::CPPTYPE_STRING &&
+      field.cpp_string_type() != FieldDescriptor::CppStringType::kView &&
+      field.cpp_string_type() != FieldDescriptor::CppStringType::kString) {
+    return false;
+  }
+
+  // If cpp has made the accessors private, we can't make accessors on top.
+  if (internal::cpp::IsStringFieldWithPrivatizedAccessors(field)) {
+    return false;
+  }
+
+  return true;
+}
+
 namespace {
 
 std::unique_ptr<AccessorGenerator> AccessorGeneratorFor(
     Context& ctx, const FieldDescriptor& field) {
-  // TODO: We do not support [ctype=FOO] (used to set the field
-  // type in C++ to cord or string_piece) in V0.6 API.
-  if (field.options().has_ctype()) {
-    return std::make_unique<UnsupportedField>(
-        "fields with ctype not supported");
+  if (!IsSupportedField(ctx, field)) {
+    return std::make_unique<UnsupportedField>();
   }
 
   if (field.is_map()) {
-    auto value_type = field.message_type()->map_value()->type();
-    switch (value_type) {
-      case FieldDescriptor::TYPE_ENUM:
-      case FieldDescriptor::TYPE_MESSAGE:
-        return std::make_unique<UnsupportedField>(
-            "Maps with values of type enum and message are not "
-            "supported");
-      default:
-        return std::make_unique<Map>();
-    }
+    return std::make_unique<Map>();
   }
 
-  switch (field.type()) {
-    case FieldDescriptor::TYPE_INT32:
-    case FieldDescriptor::TYPE_INT64:
-    case FieldDescriptor::TYPE_FIXED32:
-    case FieldDescriptor::TYPE_FIXED64:
-    case FieldDescriptor::TYPE_SFIXED32:
-    case FieldDescriptor::TYPE_SFIXED64:
-    case FieldDescriptor::TYPE_SINT32:
-    case FieldDescriptor::TYPE_SINT64:
-    case FieldDescriptor::TYPE_UINT32:
-    case FieldDescriptor::TYPE_UINT64:
-    case FieldDescriptor::TYPE_FLOAT:
-    case FieldDescriptor::TYPE_DOUBLE:
-    case FieldDescriptor::TYPE_BOOL:
-      if (field.is_repeated()) {
-        return std::make_unique<RepeatedField>();
-      }
+  if (field.is_repeated()) {
+    return std::make_unique<RepeatedField>();
+  }
+
+  switch (GetRustFieldType(field)) {
+    case RustFieldType::INT32:
+    case RustFieldType::INT64:
+    case RustFieldType::UINT32:
+    case RustFieldType::UINT64:
+    case RustFieldType::FLOAT:
+    case RustFieldType::DOUBLE:
+    case RustFieldType::BOOL:
+    case RustFieldType::ENUM:
       return std::make_unique<SingularScalar>();
-    case FieldDescriptor::TYPE_ENUM:
-      if (field.is_repeated()) {
-        return std::make_unique<RepeatedField>();
-      }
-      return std::make_unique<SingularScalar>();
-    case FieldDescriptor::TYPE_BYTES:
-    case FieldDescriptor::TYPE_STRING:
-      if (field.is_repeated()) {
-        return std::make_unique<RepeatedField>();
+    case RustFieldType::BYTES:
+    case RustFieldType::STRING:
+      if (ctx.is_cpp() &&
+          field.cpp_string_type() == FieldDescriptor::CppStringType::kCord) {
+        return std::make_unique<SingularCord>();
       }
       return std::make_unique<SingularString>();
-    case FieldDescriptor::TYPE_MESSAGE:
-      if (field.is_repeated()) {
-        return std::make_unique<RepeatedField>();
-      }
+    case RustFieldType::MESSAGE:
       return std::make_unique<SingularMessage>();
-
-    case FieldDescriptor::TYPE_GROUP:
-      return std::make_unique<UnsupportedField>("group not supported");
   }
 
-  ABSL_LOG(FATAL) << "Unexpected field type: " << field.type();
+  ABSL_LOG(ERROR) << "Unknown field type: " << field.type();
+  internal::Unreachable();
 }
 
 }  // namespace

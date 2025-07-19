@@ -21,10 +21,10 @@
 #include <string>
 
 #include "absl/base/call_once.h"
+#include "absl/base/optimization.h"
 #include "absl/log/absl_check.h"
 #include "google/protobuf/descriptor.h"
 #include "google/protobuf/generated_enum_reflection.h"
-#include "google/protobuf/port.h"
 #include "google/protobuf/unknown_field_set.h"
 
 // Must be included last.
@@ -59,12 +59,13 @@ class WeakFieldMap;  // weak_field_map.h
 // Tag used on offsets for fields that don't have a real offset.
 // For example, weak message fields go into the WeakFieldMap and not in an
 // actual field.
-constexpr uint32_t kInvalidFieldOffsetTag = 0x40000000u;
+inline constexpr uint32_t kInvalidFieldOffsetTag = 0x40000000u;
 
 // Mask used on offsets for split fields.
-constexpr uint32_t kSplitFieldOffsetMask = 0x80000000u;
-constexpr uint32_t kLazyMask = 0x1u;
-constexpr uint32_t kInlinedMask = 0x1u;
+inline constexpr uint32_t kSplitFieldOffsetMask = 0x80000000u;
+inline constexpr uint32_t kLazyMask = 0x1u;
+inline constexpr uint32_t kInlinedMask = 0x1u;
+inline constexpr uint32_t kMicroStringMask = 0x2u;
 
 // This struct describes the internal layout of the message, hence this is
 // used to act on the message reflectively.
@@ -118,27 +119,18 @@ struct ReflectionSchema {
     return field->real_containing_oneof();
   }
 
-  // Offset of a non-oneof field.  Getting a field offset is slightly more
-  // efficient when we know statically that it is not a oneof field.
-  uint32_t GetFieldOffsetNonOneof(const FieldDescriptor* field) const {
-    ABSL_DCHECK(!InRealOneof(field));
-    return OffsetValue(offsets_[field->index()], field->type());
-  }
-
   // Offset of any field.
+  template <typename Type = void>
   uint32_t GetFieldOffset(const FieldDescriptor* field) const {
-    if (InRealOneof(field)) {
-      size_t offset =
-          static_cast<size_t>(field->containing_type()->field_count()) +
-          field->containing_oneof()->index();
-      return OffsetValue(offsets_[offset], field->type());
-    } else {
-      return GetFieldOffsetNonOneof(field);
-    }
+    return OffsetValue<Type>(offsets_[field->index()], field->type());
   }
 
   bool IsFieldInlined(const FieldDescriptor* field) const {
     return Inlined(offsets_[field->index()], field->type());
+  }
+
+  bool IsFieldMicroString(const FieldDescriptor* field) const {
+    return IsMicroString(offsets_[field->index()], field->type());
   }
 
   uint32_t GetOneofCaseOffset(const OneofDescriptor* oneof_descriptor) const {
@@ -148,10 +140,15 @@ struct ReflectionSchema {
                sizeof(uint32_t));
   }
 
+  // Returns true iff the field object has usable hasbit offset.
+  // Note that this is not necessarily correlated with *field presence* :
+  // Fields with implicit presence (i.e. ones that don't expose has_foo API)
+  // can still have hasbits in their underlying implementation.
   bool HasHasbits() const { return has_bits_offset_ != -1; }
 
   // Bit index within the bit array of hasbits.  Bit order is low-to-high.
   uint32_t HasBitIndex(const FieldDescriptor* field) const {
+    ABSL_DCHECK(!field->is_extension());
     if (has_bits_offset_ == -1) return static_cast<uint32_t>(-1);
     ABSL_DCHECK(HasHasbits());
     return has_bit_indices_[field->index()];
@@ -178,14 +175,6 @@ struct ReflectionSchema {
     return static_cast<uint32_t>(inlined_string_donated_offset_);
   }
 
-  // The offset of the InternalMetadataWithArena member.
-  // For Lite this will actually be an InternalMetadataWithArenaLite.
-  // The schema doesn't contain enough information to distinguish between
-  // these two cases.
-  uint32_t GetMetadataOffset() const {
-    return static_cast<uint32_t>(metadata_offset_);
-  }
-
   // Whether this message has an ExtensionSet.
   bool HasExtensionSet() const { return extensions_offset_ != -1; }
 
@@ -207,7 +196,7 @@ struct ReflectionSchema {
   // of the underlying data depends on the field's type.
   const void* GetFieldDefault(const FieldDescriptor* field) const {
     return reinterpret_cast<const uint8_t*>(default_instance_) +
-           OffsetValue(offsets_[field->index()], field->type());
+           OffsetValue<void>(offsets_[field->index()], field->type());
   }
 
   // Returns true if the field is implicitly backed by LazyField.
@@ -248,7 +237,6 @@ struct ReflectionSchema {
   const uint32_t* offsets_;
   const uint32_t* has_bit_indices_;
   int has_bits_offset_;
-  int metadata_offset_;
   int extensions_offset_;
   int oneof_case_offset_;
   int object_size_;
@@ -260,11 +248,18 @@ struct ReflectionSchema {
 
   // We tag offset values to provide additional data about fields (such as
   // "unused" or "lazy" or "inlined").
+  template <typename Type>
   static uint32_t OffsetValue(uint32_t v, FieldDescriptor::Type type) {
+    if constexpr (!std::is_void_v<Type>) {
+      // If the type is passed, statically use the alignment for the mask.
+      // Faster than checking `type`.
+      return v & ~kSplitFieldOffsetMask & ~(alignof(Type) - 1);
+    }
     if (type == FieldDescriptor::TYPE_MESSAGE ||
         type == FieldDescriptor::TYPE_STRING ||
         type == FieldDescriptor::TYPE_BYTES) {
-      return v & (~kSplitFieldOffsetMask) & (~kInlinedMask) & (~kLazyMask);
+      return v & ~kSplitFieldOffsetMask & ~kInlinedMask & ~kLazyMask &
+             ~kMicroStringMask;
     }
     return v & (~kSplitFieldOffsetMask);
   }
@@ -278,6 +273,13 @@ struct ReflectionSchema {
       return false;
     }
   }
+
+  static bool IsMicroString(uint32_t v, FieldDescriptor::Type type) {
+    ABSL_DCHECK(type == FieldDescriptor::TYPE_STRING ||
+                type == FieldDescriptor::TYPE_BYTES)
+        << type;
+    return (v & kMicroStringMask) != 0u;
+  }
 };
 
 // Structs that the code generator emits directly to describe a message.
@@ -288,8 +290,6 @@ struct ReflectionSchema {
 // or merge with ReflectionSchema.
 struct MigrationSchema {
   int32_t offsets_index;
-  int32_t has_bit_indices_index;
-  int32_t inlined_string_indices_index;
   int object_size;
 };
 
@@ -310,7 +310,6 @@ struct PROTOBUF_EXPORT DescriptorTable {
   const Message* const* default_instances;
   const uint32_t* offsets;
   // update the following descriptor arrays.
-  Metadata* file_level_metadata;
   const EnumDescriptor** file_level_enum_descriptors;
   const ServiceDescriptor** file_level_service_descriptors;
 };
@@ -321,14 +320,9 @@ struct PROTOBUF_EXPORT DescriptorTable {
 // called the first time anyone calls descriptor() or GetReflection() on one of
 // the types defined in the file.  AssignDescriptors() is thread-safe.
 void PROTOBUF_EXPORT AssignDescriptors(const DescriptorTable* table);
-
-// Overload used to implement GetMetadataStatic in the generated code.
-// See comments in compiler/cpp/file.cc as to why.
-// It takes a `Metadata` and returns it to allow for tail calls and reduce
-// binary size.
-Metadata PROTOBUF_EXPORT AssignDescriptors(const DescriptorTable* (*table)(),
-                                           absl::once_flag* once,
-                                           const Metadata& metadata);
+// As above, but the caller did the call_once call already.
+void PROTOBUF_EXPORT
+AssignDescriptorsOnceInnerCall(const DescriptorTable* table);
 
 // These cannot be in lite so we put them in the reflection.
 PROTOBUF_EXPORT void UnknownFieldSetSerializer(const uint8_t* base,
@@ -345,9 +339,11 @@ struct PROTOBUF_EXPORT AddDescriptorsRunner {
 };
 
 // Retrieves the existing prototype out of a descriptor table.
-// If it doesn't exist, asks the generated message factory for one.
+// If it doesn't exist:
+//  - If force_build is true, asks the generated message factory for one.
+//  - Otherwise, return null
 const Message* GetPrototypeForWeakDescriptor(const DescriptorTable* table,
-                                             int index);
+                                             int index, bool force_build);
 
 struct DenseEnumCacheInfo {
   std::atomic<const std::string**> cache;
@@ -369,8 +365,8 @@ const std::string& NameOfDenseEnum(int v) {
   static DenseEnumCacheInfo deci = {/* atomic ptr */ {}, min_val, max_val,
                                     descriptor_fn};
   const std::string** cache = deci.cache.load(std::memory_order_acquire );
-  if (PROTOBUF_PREDICT_TRUE(cache != nullptr)) {
-    if (PROTOBUF_PREDICT_TRUE(v >= min_val && v <= max_val)) {
+  if (ABSL_PREDICT_TRUE(cache != nullptr)) {
+    if (ABSL_PREDICT_TRUE(v >= min_val && v <= max_val)) {
       return *cache[v - min_val];
     }
   }

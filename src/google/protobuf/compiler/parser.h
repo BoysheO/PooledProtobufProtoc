@@ -25,6 +25,7 @@
 #include "google/protobuf/descriptor.pb.h"
 #include "google/protobuf/io/tokenizer.h"
 #include "google/protobuf/repeated_field.h"
+#include "google/protobuf/repeated_ptr_field.h"
 
 // Must be included last.
 #include "google/protobuf/port_def.inc"
@@ -47,7 +48,7 @@ class SourceLocationTable;
 // to a FileDescriptorProto.  It does not resolve import directives or perform
 // many other kinds of validation needed to construct a complete
 // FileDescriptor.
-class PROTOBUF_EXPORT Parser {
+class PROTOBUF_EXPORT Parser final {
  public:
   Parser();
   Parser(const Parser&) = delete;
@@ -333,9 +334,11 @@ class PROTOBUF_EXPORT Parser {
 
   // Parse various language high-level language construrcts.
   bool ParseMessageDefinition(DescriptorProto* message,
+                              const SymbolVisibility& visibility,
                               const LocationRecorder& message_location,
                               const FileDescriptorProto* containing_file);
   bool ParseEnumDefinition(EnumDescriptorProto* enum_type,
+                           const SymbolVisibility& visibility,
                            const LocationRecorder& enum_location,
                            const FileDescriptorProto* containing_file);
   bool ParseServiceDefinition(ServiceDescriptorProto* service,
@@ -345,6 +348,7 @@ class PROTOBUF_EXPORT Parser {
                     const LocationRecorder& root_location,
                     const FileDescriptorProto* containing_file);
   bool ParseImport(RepeatedPtrField<std::string>* dependency,
+                   RepeatedPtrField<std::string>* option_dependency,
                    RepeatedField<int32_t>* public_dependency,
                    RepeatedField<int32_t>* weak_dependency,
                    const LocationRecorder& root_location,
@@ -464,8 +468,7 @@ class PROTOBUF_EXPORT Parser {
   // Parse options of a single method or stream.
   bool ParseMethodOptions(const LocationRecorder& parent_location,
                           const FileDescriptorProto* containing_file,
-                          const int optionsFieldNumber,
-                          Message* mutable_options);
+                          int optionsFieldNumber, Message* mutable_options);
 
   // Parse "required", "optional", or "repeated" and fill in "label"
   // with the value. Returns true if such a label is consumed.
@@ -527,6 +530,12 @@ class PROTOBUF_EXPORT Parser {
   // the ending brace.
   bool ParseUninterpretedBlock(std::string* value);
 
+  // Tries to parse a visibility prefix on message and enum and returns true if
+  // the syntax is valid or not present, if present and valid sets the output
+  // SymbolVisibility to export or local, leaving unchanged if not set.
+  bool ParseVisibility(const FileDescriptorProto* containing_file,
+                       SymbolVisibility* out);
+
   struct MapField {
     // Whether the field is a map field.
     bool is_map_field;
@@ -563,6 +572,7 @@ class PROTOBUF_EXPORT Parser {
   bool stop_after_syntax_identifier_;
   std::string syntax_identifier_;
   Edition edition_ = Edition::EDITION_UNKNOWN;
+  int recursion_depth_;
 
   // Leading doc comments for the next declaration.  These are not complete
   // yet; use ConsumeEndOfDeclaration() to get the complete comments.

@@ -199,15 +199,12 @@ PyObject* PyUpb_ObjCache_Get(const void* key) {
 // -----------------------------------------------------------------------------
 
 typedef struct {
-  PyObject_HEAD;
+  // clang-format off
+  PyObject_HEAD
   upb_Arena* arena;
+  // clang-format on
 } PyUpb_Arena;
 
-// begin:google_only
-// static upb_alloc* global_alloc = &upb_alloc_global;
-// end:google_only
-
-// begin:github_only
 #ifdef __GLIBC__
 #include <malloc.h>  // malloc_trim()
 #endif
@@ -216,13 +213,13 @@ typedef struct {
 // memory to the OS.  Without this call, we appear to leak memory, at least
 // as measured in RSS.
 //
-// We opt not to use this instead of PyMalloc (which would also solve the
+// We opt to use this instead of PyMalloc (which would also solve the
 // problem) because the latter requires the GIL to be held.  This would make
 // our messages unsafe to share with other languages that could free at
 // unpredictable
 // times.
 static void* upb_trim_allocfunc(upb_alloc* alloc, void* ptr, size_t oldsize,
-                                size_t size) {
+                                size_t size, size_t* actual_size) {
   (void)alloc;
   (void)oldsize;
   if (size == 0) {
@@ -240,8 +237,7 @@ static void* upb_trim_allocfunc(upb_alloc* alloc, void* ptr, size_t oldsize,
   }
 }
 static upb_alloc trim_alloc = {&upb_trim_allocfunc};
-static const upb_alloc* global_alloc = &trim_alloc;
-// end:github_only
+static upb_alloc* global_alloc = &trim_alloc;
 
 static upb_Arena* PyUpb_NewArena(void) {
   return upb_Arena_Init(NULL, 0, global_alloc);
@@ -323,6 +319,31 @@ PyTypeObject* PyUpb_AddClassWithBases(PyObject* m, PyType_Spec* spec,
   return (PyTypeObject*)type;
 }
 
+PyTypeObject* PyUpb_AddClassWithRegister(PyObject* m, PyType_Spec* spec,
+                                         PyObject* virtual_base,
+                                         const char** methods) {
+  PyObject* type = PyType_FromSpec(spec);
+  PyObject* ret1 = PyObject_CallMethod(virtual_base, "register", "O", type);
+  if (!ret1) {
+    Py_XDECREF(type);
+    return NULL;
+  }
+  for (size_t i = 0; methods[i] != NULL; i++) {
+    PyObject* method = PyObject_GetAttrString(virtual_base, methods[i]);
+    if (!method) {
+      Py_XDECREF(type);
+      return NULL;
+    }
+    int ret2 = PyObject_SetAttrString(type, methods[i], method);
+    if (ret2 < 0) {
+      Py_XDECREF(type);
+      return NULL;
+    }
+  }
+
+  return (PyTypeObject*)type;
+}
+
 const char* PyUpb_GetStrData(PyObject* obj) {
   if (PyUnicode_Check(obj)) {
     return PyUnicode_AsUTF8AndSize(obj, NULL);
@@ -380,7 +401,7 @@ bool PyUpb_IndexToRange(PyObject* index, Py_ssize_t size, Py_ssize_t* i,
 // Module Entry Point
 // -----------------------------------------------------------------------------
 
-__attribute__((visibility("default"))) PyMODINIT_FUNC PyInit__message(void) {
+PyMODINIT_FUNC PyInit__message(void) {
   PyObject* m = PyModule_Create(&module_def);
   if (!m) return NULL;
 

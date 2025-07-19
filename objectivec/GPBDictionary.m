@@ -5,12 +5,18 @@
 // license that can be found in the LICENSE file or at
 // https://developers.google.com/open-source/licenses/bsd
 
+#import "GPBDictionary.h"
 #import "GPBDictionary_PackagePrivate.h"
 
+#import "GPBCodedInputStream.h"
 #import "GPBCodedInputStream_PackagePrivate.h"
+#import "GPBCodedOutputStream.h"
 #import "GPBCodedOutputStream_PackagePrivate.h"
+#import "GPBDescriptor.h"
 #import "GPBDescriptor_PackagePrivate.h"
+#import "GPBMessage.h"
 #import "GPBMessage_PackagePrivate.h"
+#import "GPBUtilities.h"
 #import "GPBUtilities_PackagePrivate.h"
 
 // ------------------------------ NOTE ------------------------------
@@ -478,7 +484,7 @@ void GPBDictionaryReadEntry(id mapDictionary, GPBCodedInputStream *stream,
       [(NSMutableDictionary *)mapDictionary setObject:value.valueString forKey:key.valueString];
     } else {
       if (valueDataType == GPBDataTypeEnum) {
-        if (!GPBFieldIsClosedEnum(field) || [field isValidEnumValue:value.valueEnum]) {
+        if ([field.enumDescriptor isOpenOrValidValue:value.valueEnum]) {
           [mapDictionary setGPBGenericValue:&value forGPBGenericValueKey:&key];
         } else {
           NSData *data = [mapDictionary serializedDataForUnknownValue:value.valueEnum

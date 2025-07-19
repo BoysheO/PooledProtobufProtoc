@@ -10,12 +10,8 @@
 #include <sys/types.h>
 
 #include <atomic>
-#include <cfloat>
 #include <cmath>
 #include <cstdint>
-#include <iostream>
-#include <limits>
-#include <ostream>
 #include <string>
 #include <utility>
 
@@ -513,3 +509,5 @@ absl::StatusOr<LocationWith<MaybeOwnedString>> JsonLexer::ParseBareWord() {
 }  // namespace json_internal
 }  // namespace protobuf
 }  // namespace google
+
+#include "google/protobuf/port_undef.inc"

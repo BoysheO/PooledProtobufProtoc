@@ -15,12 +15,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
-#include <type_traits>
-#include <typeinfo>
-#include <utility>
 #include <vector>
 
-#include "google/protobuf/stubs/common.h"
 #include "absl/base/attributes.h"
 #include "absl/base/optimization.h"
 #include "absl/base/prefetch.h"
@@ -28,7 +24,6 @@
 #include "absl/numeric/bits.h"
 #include "google/protobuf/arena_align.h"
 #include "google/protobuf/arena_cleanup.h"
-#include "google/protobuf/arenaz_sampler.h"
 #include "google/protobuf/port.h"
 #include "google/protobuf/string_block.h"
 
@@ -42,13 +37,10 @@ namespace internal {
 // Arena blocks are variable length malloc-ed objects.  The following structure
 // describes the common header for all blocks.
 struct ArenaBlock {
-  // For the sentry block with zero-size where ptr_, limit_, cleanup_nodes all
-  // point to "this".
-  constexpr ArenaBlock()
-      : next(nullptr), cleanup_nodes(this), size(0) {}
+  // For the sentry block with zero-size where ptr_/limit_ both point to `this`.
+  constexpr ArenaBlock() : next(nullptr), size(0) {}
 
-  ArenaBlock(ArenaBlock* next, size_t size)
-      : next(next), cleanup_nodes(nullptr), size(size) {
+  ArenaBlock(ArenaBlock* next, size_t size) : next(next), size(size) {
     ABSL_DCHECK_GT(size, sizeof(ArenaBlock));
   }
 
@@ -61,7 +53,6 @@ struct ArenaBlock {
   bool IsSentry() const { return size == 0; }
 
   ArenaBlock* const next;
-  void* cleanup_nodes;
   const size_t size;
   // data follows
 };
@@ -91,15 +82,7 @@ class PROTOBUF_EXPORT SerialArena {
   static constexpr size_t kBlockHeaderSize =
       ArenaAlignDefault::Ceil(sizeof(ArenaBlock));
 
-  void CleanupList();
-  size_t FreeStringBlocks() {
-    // On the active block delete all strings skipping the unused instances.
-    size_t unused_bytes = string_block_unused_.load(std::memory_order_relaxed);
-    if (StringBlock* sb = string_block_.load(std::memory_order_relaxed)) {
-      return FreeStringBlocks(sb, unused_bytes);
-    }
-    return 0;
-  }
+  void CleanupList() { cleanup_list_.Cleanup(*this); }
   uint64_t SpaceAllocated() const {
     return space_allocated_.load(std::memory_order_relaxed);
   }
@@ -107,17 +90,17 @@ class PROTOBUF_EXPORT SerialArena {
 
   // See comments on `cached_blocks_` member for details.
   PROTOBUF_ALWAYS_INLINE void* TryAllocateFromCachedBlock(size_t size) {
-    if (PROTOBUF_PREDICT_FALSE(size < 16)) return nullptr;
+    if (ABSL_PREDICT_FALSE(size < 16)) return nullptr;
     // We round up to the next larger block in case the memory doesn't match
     // the pattern we are looking for.
     const size_t index = absl::bit_width(size - 1) - 4;
 
-    if (PROTOBUF_PREDICT_FALSE(index >= cached_block_length_)) return nullptr;
+    if (ABSL_PREDICT_FALSE(index >= cached_block_length_)) return nullptr;
     auto& cached_head = cached_blocks_[index];
     if (cached_head == nullptr) return nullptr;
 
     void* ret = cached_head;
-    PROTOBUF_UNPOISON_MEMORY_REGION(ret, size);
+    internal::UnpoisonMemoryRegion(ret, size);
     cached_head = cached_head->next;
     return ret;
   }
@@ -141,15 +124,14 @@ class PROTOBUF_EXPORT SerialArena {
     }
 
     void* ptr;
-    if (PROTOBUF_PREDICT_TRUE(MaybeAllocateAligned(n, &ptr))) {
+    if (ABSL_PREDICT_TRUE(MaybeAllocateAligned(n, &ptr))) {
       return ptr;
     }
     return AllocateAlignedFallback(n);
   }
 
  private:
-  static inline PROTOBUF_ALWAYS_INLINE constexpr size_t AlignUpTo(size_t n,
-                                                                  size_t a) {
+  static PROTOBUF_ALWAYS_INLINE constexpr size_t AlignUpTo(size_t n, size_t a) {
     // We are wasting space by over allocating align - 8 bytes. Compared to a
     // dedicated function that takes current alignment in consideration.  Such a
     // scheme would only waste (align - 8)/2 bytes on average, but requires a
@@ -158,7 +140,7 @@ class PROTOBUF_EXPORT SerialArena {
     return a <= 8 ? ArenaAlignDefault::Ceil(n) : ArenaAlignAs(a).Padded(n);
   }
 
-  static inline PROTOBUF_ALWAYS_INLINE void* AlignTo(void* p, size_t a) {
+  static PROTOBUF_ALWAYS_INLINE void* AlignTo(void* p, size_t a) {
     return (a <= ArenaAlignDefault::align)
                ? ArenaAlignDefault::CeilDefaultAligned(p)
                : ArenaAlignAs(a).CeilDefaultAligned(p);
@@ -170,7 +152,7 @@ class PROTOBUF_EXPORT SerialArena {
     // In 64-bit platforms the minimum allocation size from Repeated*Field will
     // be 16 guaranteed.
     if (sizeof(void*) < 8) {
-      if (PROTOBUF_PREDICT_FALSE(size < 16)) return;
+      if (ABSL_PREDICT_FALSE(size < 16)) return;
     } else {
       PROTOBUF_ASSUME(size >= 16);
     }
@@ -180,7 +162,7 @@ class PROTOBUF_EXPORT SerialArena {
     // on the repeated field.
     const size_t index = absl::bit_width(size) - 5;
 
-    if (PROTOBUF_PREDICT_FALSE(index >= cached_block_length_)) {
+    if (ABSL_PREDICT_FALSE(index >= cached_block_length_)) {
       // We can't put this object on the freelist so make this object the
       // freelist. It is guaranteed it is larger than the one we have, and
       // large enough to hold another allocation of `size`.
@@ -191,8 +173,8 @@ class PROTOBUF_EXPORT SerialArena {
                 new_list);
 
       // We need to unpoison this memory before filling it in case it has been
-      // poisoned by another santizer client.
-      PROTOBUF_UNPOISON_MEMORY_REGION(
+      // poisoned by another sanitizer client.
+      internal::UnpoisonMemoryRegion(
           new_list + cached_block_length_,
           (new_size - cached_block_length_) * sizeof(CachedBlock*));
 
@@ -211,7 +193,7 @@ class PROTOBUF_EXPORT SerialArena {
     auto* new_node = static_cast<CachedBlock*>(p);
     new_node->next = cached_head;
     cached_head = new_node;
-    PROTOBUF_POISON_MEMORY_REGION(p, size);
+    internal::PoisonMemoryRegion(p, size);
   }
 
  public:
@@ -220,18 +202,14 @@ class PROTOBUF_EXPORT SerialArena {
     ABSL_DCHECK(internal::ArenaAlignDefault::IsAligned(n));
     ABSL_DCHECK_GE(limit_, ptr());
     char* ret = ptr();
-    // ret + n may point out of the block bounds, or ret may be nullptr.
-    // Both computations have undefined behavior when done on pointers,
-    // so do them on uintptr_t instead.
-    if (PROTOBUF_PREDICT_FALSE(reinterpret_cast<uintptr_t>(ret) + n >
-                               reinterpret_cast<uintptr_t>(limit_))) {
+    if (ABSL_PREDICT_FALSE(limit_ - ret < static_cast<ptrdiff_t>(n))) {
       return false;
     }
-    PROTOBUF_UNPOISON_MEMORY_REGION(ret, n);
+    internal::UnpoisonMemoryRegion(ret, n);
     *out = ret;
     char* next = ret + n;
     set_ptr(next);
-    MaybePrefetchForwards(next);
+    MaybePrefetchData(next);
     return true;
   }
 
@@ -249,28 +227,23 @@ class PROTOBUF_EXPORT SerialArena {
     n = ArenaAlignDefault::Ceil(n);
     char* ret = ArenaAlignAs(align).CeilDefaultAligned(ptr());
     // See the comment in MaybeAllocateAligned re uintptr_t.
-    if (PROTOBUF_PREDICT_FALSE(reinterpret_cast<uintptr_t>(ret) + n +
-                                   cleanup::Size(destructor) >
-                               reinterpret_cast<uintptr_t>(limit_))) {
+    if (ABSL_PREDICT_FALSE(reinterpret_cast<uintptr_t>(ret) + n >
+                           reinterpret_cast<uintptr_t>(limit_))) {
       return AllocateAlignedWithCleanupFallback(n, align, destructor);
     }
-    PROTOBUF_UNPOISON_MEMORY_REGION(ret, n);
+    internal::UnpoisonMemoryRegion(ret, n);
     char* next = ret + n;
     set_ptr(next);
-    AddCleanupFromExisting(ret, destructor);
+    AddCleanup(ret, destructor);
     ABSL_DCHECK_GE(limit_, ptr());
-    MaybePrefetchForwards(next);
+    MaybePrefetchData(next);
     return ret;
   }
 
   PROTOBUF_ALWAYS_INLINE
   void AddCleanup(void* elem, void (*destructor)(void*)) {
-    size_t required = cleanup::Size(destructor);
-    size_t has = static_cast<size_t>(limit_ - ptr());
-    if (PROTOBUF_PREDICT_FALSE(required > has)) {
-      return AddCleanupFallback(elem, destructor);
-    }
-    AddCleanupFromExisting(elem, destructor);
+    cleanup_list_.Add(elem, destructor, *this);
+    MaybePrefetchCleanup();
   }
 
   ABSL_ATTRIBUTE_RETURNS_NONNULL void* AllocateFromStringBlock();
@@ -279,6 +252,7 @@ class PROTOBUF_EXPORT SerialArena {
 
  private:
   friend class ThreadSafeArena;
+  friend class cleanup::ChunkList;
 
   // See comments for cached_blocks_.
   struct CachedBlock {
@@ -286,8 +260,8 @@ class PROTOBUF_EXPORT SerialArena {
     CachedBlock* next;
   };
 
-  static constexpr ptrdiff_t kPrefetchForwardsDegree = ABSL_CACHELINE_SIZE * 16;
-  static constexpr ptrdiff_t kPrefetchBackwardsDegree = ABSL_CACHELINE_SIZE * 6;
+  static constexpr ptrdiff_t kPrefetchDataDegree = ABSL_CACHELINE_SIZE * 16;
+  static constexpr ptrdiff_t kPrefetchCleanupDegree = ABSL_CACHELINE_SIZE * 6;
 
   // Constructor is private as only New() should be used.
   inline SerialArena(ArenaBlock* b, ThreadSafeArena& parent);
@@ -299,60 +273,41 @@ class PROTOBUF_EXPORT SerialArena {
   bool MaybeAllocateString(void*& p);
   ABSL_ATTRIBUTE_RETURNS_NONNULL void* AllocateFromStringBlockFallback();
 
+  // Prefetch the next prefetch_degree bytes after `prefetch_ptr` and
+  // up to `limit`, if `next` is within prefetch_degree bytes of `prefetch_ptr`.
   PROTOBUF_ALWAYS_INLINE
-  void AddCleanupFromExisting(void* elem, void (*destructor)(void*)) {
-    cleanup::Tag tag = cleanup::Type(destructor);
-    size_t n = cleanup::Size(tag);
-
-    PROTOBUF_UNPOISON_MEMORY_REGION(limit_ - n, n);
-    limit_ -= n;
-    MaybePrefetchBackwards(limit_);
-    ABSL_DCHECK_GE(limit_, ptr());
-    cleanup::CreateNode(tag, limit_, elem, destructor);
-  }
-
-  // Prefetch the next kPrefetchForwardsDegree bytes after `prefetch_ptr_` and
-  // up to `prefetch_limit_`, if `next` is within kPrefetchForwardsDegree bytes
-  // of `prefetch_ptr_`.
-  PROTOBUF_ALWAYS_INLINE
-  void MaybePrefetchForwards(const char* next) {
-    ABSL_DCHECK(static_cast<const void*>(prefetch_ptr_) == nullptr ||
-                static_cast<const void*>(prefetch_ptr_) >= head());
-    if (PROTOBUF_PREDICT_TRUE(prefetch_ptr_ - next > kPrefetchForwardsDegree))
-      return;
-    if (PROTOBUF_PREDICT_TRUE(prefetch_ptr_ < prefetch_limit_)) {
-      const char* prefetch_ptr = std::max(next, prefetch_ptr_);
+  static const char* MaybePrefetchImpl(const ptrdiff_t prefetch_degree,
+                                       const char* next, const char* limit,
+                                       const char* prefetch_ptr) {
+    if (ABSL_PREDICT_TRUE(prefetch_ptr - next > prefetch_degree))
+      return prefetch_ptr;
+    if (ABSL_PREDICT_TRUE(prefetch_ptr < limit)) {
+      prefetch_ptr = std::max(next, prefetch_ptr);
       ABSL_DCHECK(prefetch_ptr != nullptr);
-      const char* end =
-          std::min(prefetch_limit_, prefetch_ptr + ABSL_CACHELINE_SIZE * 16);
+      const char* end = std::min(limit, prefetch_ptr + prefetch_degree);
       for (; prefetch_ptr < end; prefetch_ptr += ABSL_CACHELINE_SIZE) {
         absl::PrefetchToLocalCacheForWrite(prefetch_ptr);
       }
-      prefetch_ptr_ = prefetch_ptr;
     }
+    return prefetch_ptr;
   }
-
   PROTOBUF_ALWAYS_INLINE
-  // Prefetch up to kPrefetchBackwardsDegree before `prefetch_limit_` and after
-  // `prefetch_ptr_`, if `limit` is within  kPrefetchBackwardsDegree of
-  // `prefetch_limit_`.
-  void MaybePrefetchBackwards(const char* limit) {
-    ABSL_DCHECK(prefetch_limit_ == nullptr ||
-                static_cast<const void*>(prefetch_limit_) <=
-                    static_cast<const void*>(head()->Limit()));
-    if (PROTOBUF_PREDICT_TRUE(limit - prefetch_limit_ >
-                              kPrefetchBackwardsDegree))
-      return;
-    if (PROTOBUF_PREDICT_TRUE(prefetch_limit_ > prefetch_ptr_)) {
-      const char* prefetch_limit = std::min(limit, prefetch_limit_);
-      ABSL_DCHECK_NE(prefetch_limit, nullptr);
-      const char* end =
-          std::max(prefetch_ptr_, prefetch_limit - kPrefetchBackwardsDegree);
-      for (; prefetch_limit > end; prefetch_limit -= ABSL_CACHELINE_SIZE) {
-        absl::PrefetchToLocalCacheForWrite(prefetch_limit);
-      }
-      prefetch_limit_ = prefetch_limit;
-    }
+  void MaybePrefetchData(const char* next) {
+    ABSL_DCHECK(static_cast<const void*>(prefetch_ptr_) == ptr() ||
+                static_cast<const void*>(prefetch_ptr_) >= head());
+    prefetch_ptr_ =
+        MaybePrefetchImpl(kPrefetchDataDegree, next, limit_, prefetch_ptr_);
+  }
+  PROTOBUF_ALWAYS_INLINE
+  void MaybePrefetchCleanup() {
+    ABSL_DCHECK(static_cast<const void*>(cleanup_list_.prefetch_ptr_) ==
+                    nullptr ||
+                static_cast<const void*>(cleanup_list_.prefetch_ptr_) >=
+                    cleanup_list_.head_);
+    cleanup_list_.prefetch_ptr_ = MaybePrefetchImpl(
+        kPrefetchCleanupDegree, reinterpret_cast<char*>(cleanup_list_.next_),
+        reinterpret_cast<char*>(cleanup_list_.limit_),
+        cleanup_list_.prefetch_ptr_);
   }
 
   // Creates a new SerialArena inside mem using the remaining memory as for
@@ -360,10 +315,18 @@ class PROTOBUF_EXPORT SerialArena {
   // The `parent` arena must outlive the serial arena, which is guaranteed
   // because the parent manages the lifetime of the serial arenas.
   static SerialArena* New(SizedPtr mem, ThreadSafeArena& parent);
-  // Free SerialArena returning the memory passed in to New
+  // Free SerialArena returning the memory passed in to New.
   template <typename Deallocator>
   SizedPtr Free(Deallocator deallocator);
 
+  size_t FreeStringBlocks() {
+    // On the active block delete all strings skipping the unused instances.
+    size_t unused_bytes = string_block_unused_.load(std::memory_order_relaxed);
+    if (StringBlock* sb = string_block_.load(std::memory_order_relaxed)) {
+      return FreeStringBlocks(sb, unused_bytes);
+    }
+    return 0;
+  }
   static size_t FreeStringBlocks(StringBlock* string_block, size_t unused);
 
   // Adds 'used` to space_used_ in relaxed atomic order.
@@ -392,7 +355,6 @@ class PROTOBUF_EXPORT SerialArena {
     set_ptr(ptr);
     prefetch_ptr_ = ptr;
     limit_ = limit;
-    prefetch_limit_ = limit;
   }
 
   void* AllocateAlignedFallback(size_t n);
@@ -405,17 +367,27 @@ class PROTOBUF_EXPORT SerialArena {
   // Members are declared here to track sizeof(SerialArena) and hotness
   // centrally. They are (roughly) laid out in descending order of hotness.
 
+  // We initialize ptr/limit with an arbitrary valid pointer.
+  // This allows Allocate to always return non-null even when asking for zero
+  // bytes.
+  static char* ArbitraryInternalPointerForInit() {
+    // Use rodata to detect potential bugs. No one should be writing here.
+    alignas(8) static constexpr char dummy{};
+    return const_cast<char*>(&dummy);
+  }
+
   // Next pointer to allocate from.  Always 8-byte aligned.  Points inside
   // head_ (and head_->pos will always be non-canonical).  We keep these
   // here to reduce indirection.
-  std::atomic<char*> ptr_{nullptr};
+  std::atomic<char*> ptr_{ArbitraryInternalPointerForInit()};
   // Limiting address up to which memory can be allocated from the head block.
-  char* limit_ = nullptr;
+  char* limit_ = ArbitraryInternalPointerForInit();
   // Current prefetch positions. Data from `ptr_` up to but not including
-  // `prefetch_ptr_` is software prefetched. Similarly, data from `limit_` down
-  // to but not including `prefetch_limit_` is software prefetched.
-  const char* prefetch_ptr_ = nullptr;
-  const char* prefetch_limit_ = nullptr;
+  // `prefetch_ptr_` is software prefetched.
+  const char* prefetch_ptr_ = ArbitraryInternalPointerForInit();
+
+  // Chunked linked list for managing cleanup for arena elements.
+  cleanup::ChunkList cleanup_list_;
 
   // The active string block.
   std::atomic<StringBlock*> string_block_{nullptr};
@@ -441,10 +413,10 @@ class PROTOBUF_EXPORT SerialArena {
   CachedBlock** cached_blocks_ = nullptr;
 };
 
-inline PROTOBUF_ALWAYS_INLINE bool SerialArena::MaybeAllocateString(void*& p) {
+PROTOBUF_ALWAYS_INLINE bool SerialArena::MaybeAllocateString(void*& p) {
   // Check how many unused instances are in the current block.
   size_t unused_bytes = string_block_unused_.load(std::memory_order_relaxed);
-  if (PROTOBUF_PREDICT_TRUE(unused_bytes != 0)) {
+  if (ABSL_PREDICT_TRUE(unused_bytes != 0)) {
     unused_bytes -= sizeof(std::string);
     string_block_unused_.store(unused_bytes, std::memory_order_relaxed);
     p = string_block_.load(std::memory_order_relaxed)->AtOffset(unused_bytes);
@@ -453,7 +425,7 @@ inline PROTOBUF_ALWAYS_INLINE bool SerialArena::MaybeAllocateString(void*& p) {
   return false;
 }
 
-ABSL_ATTRIBUTE_RETURNS_NONNULL inline PROTOBUF_ALWAYS_INLINE void*
+ABSL_ATTRIBUTE_RETURNS_NONNULL PROTOBUF_ALWAYS_INLINE void*
 SerialArena::AllocateFromStringBlock() {
   void* p;
   if (ABSL_PREDICT_TRUE(MaybeAllocateString(p))) return p;

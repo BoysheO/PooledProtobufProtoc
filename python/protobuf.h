@@ -8,25 +8,18 @@
 #ifndef PYUPB_PROTOBUF_H__
 #define PYUPB_PROTOBUF_H__
 
+#include <assert.h>
 #include <stdbool.h>
 
 #include "python/descriptor.h"
 #include "python/python_api.h"
 #include "upb/hash/int_table.h"
+#include "upb/reflection/def.h"
 
-// begin:github_only
 #define PYUPB_PROTOBUF_PUBLIC_PACKAGE "google.protobuf"
 #define PYUPB_PROTOBUF_INTERNAL_PACKAGE "google.protobuf.internal"
 #define PYUPB_DESCRIPTOR_PROTO_PACKAGE "google.protobuf"
 #define PYUPB_MODULE_NAME "google._upb._message"
-// end:github_only
-
-// begin:google_only
-// #define PYUPB_PROTOBUF_PUBLIC_PACKAGE "google3.net.google.protobuf.python.public"
-// #define PYUPB_PROTOBUF_INTERNAL_PACKAGE "google3.net.google.protobuf.python.internal"
-// #define PYUPB_DESCRIPTOR_PROTO_PACKAGE "proto2"
-// #define PYUPB_MODULE_NAME "google3.third_party.upb.python._message"
-// end:google_only
 
 #define PYUPB_DESCRIPTOR_MODULE "google.protobuf.descriptor_pb2"
 #define PYUPB_RETURN_OOM return PyErr_SetNone(PyExc_MemoryError), NULL
@@ -180,14 +173,19 @@ PyTypeObject* PyUpb_AddClass(PyObject* m, PyType_Spec* spec);
 PyTypeObject* PyUpb_AddClassWithBases(PyObject* m, PyType_Spec* spec,
                                       PyObject* bases);
 
+// Like PyUpb_AddClass(), but allows you to specify a tuple of base classes in
+// `bases` to register as a "virtual subclass" with mixin methods.
+PyTypeObject* PyUpb_AddClassWithRegister(PyObject* m, PyType_Spec* spec,
+                                         PyObject* virtual_base,
+                                         const char** methods);
+
 // A function that implements the tp_new slot for types that we do not allow
 // users to create directly. This will immediately fail with an error message.
 PyObject* PyUpb_Forbidden_New(PyObject* cls, PyObject* args, PyObject* kwds);
 
 // Our standard dealloc func. It follows the guidance defined in:
 //   https://docs.python.org/3/c-api/typeobj.html#c.PyTypeObject.tp_dealloc
-// However it tests Py_TPFLAGS_HEAPTYPE dynamically so that a single dealloc
-// function can work for any type.
+// It requires that the type is a heap type, which all of our types are.
 static inline void PyUpb_Dealloc(void* self) {
   PyTypeObject* tp = Py_TYPE(self);
   assert(PyType_GetFlags(tp) & Py_TPFLAGS_HEAPTYPE);

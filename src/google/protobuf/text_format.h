@@ -1,5 +1,5 @@
 // Protocol Buffers - Google's data interchange format
-// Copyright 2008 Google Inc.  All rights reserved.
+// Copyright 2008 Google LLC.  All rights reserved.
 //
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file or at
@@ -44,17 +44,13 @@ namespace internal {
 PROTOBUF_EXPORT extern const char kDebugStringSilentMarker[1];
 PROTOBUF_EXPORT extern const char kDebugStringSilentMarkerForDetection[3];
 
-PROTOBUF_EXPORT extern std::atomic<bool> enable_debug_text_format_marker;
-PROTOBUF_EXPORT extern std::atomic<bool> enable_debug_text_detection;
-PROTOBUF_EXPORT extern std::atomic<bool> enable_debug_text_redaction;
 PROTOBUF_EXPORT int64_t GetRedactedFieldCount();
-PROTOBUF_EXPORT bool ShouldRedactField(const FieldDescriptor* field);
 
 // This enum contains all the APIs that convert protos to human-readable
 // formats. A higher-level API must correspond to a greater number than any
 // lower-level APIs it calls under the hood (e.g kDebugString >
 // kMemberPrintToString > kPrintWithStream).
-PROTOBUF_EXPORT enum class FieldReporterLevel {
+enum class PROTOBUF_EXPORT FieldReporterLevel {
   kNoReport = 0,
   kPrintMessage = 1,
   kPrintWithGenerator = 2,
@@ -88,9 +84,11 @@ namespace internal {
 // Enum used to set printing options for StringifyMessage.
 PROTOBUF_EXPORT enum class Option;
 
-// Converts a protobuf message to a string with redaction enabled.
+// Converts a protobuf message to a string. Sensitive fields are redacted, and a
+// per-process randomized prefix is inserted.
 PROTOBUF_EXPORT std::string StringifyMessage(const Message& message,
-                                             Option option);
+                                             Option option,
+                                             FieldReporterLevel reporter_level);
 
 class UnsetFieldsMetadataTextFormatTestUtil;
 class UnsetFieldsMetadataMessageDifferencerTestUtil;
@@ -422,6 +420,9 @@ class PROTOBUF_EXPORT TextFormat {
       }
     }
 
+    // Sets whether strings will be redacted and thus unparsable.
+    void SetRedactDebugString(bool redact) { redact_debug_string_ = redact; }
+
     // Register a custom field-specific FastFieldValuePrinter for fields
     // with a particular FieldDescriptor.
     // Returns "true" if the registration succeeded, or "false", if there is
@@ -438,6 +439,7 @@ class PROTOBUF_EXPORT TextFormat {
     // particular Descriptor.
     // Returns "true" if the registration succeeded, or "false" if there is
     // already a printer for that Descriptor.
+    // Takes ownership of the printer on successful registration.
     bool RegisterMessagePrinter(const Descriptor* descriptor,
                                 const MessagePrinter* printer);
 
@@ -453,14 +455,12 @@ class PROTOBUF_EXPORT TextFormat {
     friend std::string Message::DebugString() const;
     friend std::string Message::ShortDebugString() const;
     friend std::string Message::Utf8DebugString() const;
-    friend std::string internal::StringifyMessage(const Message& message,
-                                                  internal::Option option);
+    friend std::string internal::StringifyMessage(
+        const Message& message, internal::Option option,
+        internal::FieldReporterLevel reporter_level);
 
     // Sets whether silent markers will be inserted.
     void SetInsertSilentMarker(bool v) { insert_silent_marker_ = v; }
-
-    // Sets whether strings will be redacted and thus unparsable.
-    void SetRedactDebugString(bool redact) { redact_debug_string_ = redact; }
 
     // Sets whether the output string should be made non-deterministic.
     // This discourages equality checks based on serialized string comparisons.
@@ -614,6 +614,17 @@ class PROTOBUF_EXPORT TextFormat {
         : start(start_param), end(end_param) {}
   };
 
+  struct RedactionState {
+    bool redact;
+    bool report;
+  };
+
+  static TextFormat::RedactionState GetRedactionState(
+      const FieldDescriptor* field);
+
+  static TextFormat::RedactionState IsOptionSensitive(
+      const Message& opts, const Reflection* reflection,
+      const FieldDescriptor* option);
   // Data structure which is populated with the locations of each field
   // value parsed from the text.
   class PROTOBUF_EXPORT ParseInfoTree {
@@ -815,6 +826,10 @@ class PROTOBUF_EXPORT TextFormat {
                                    const T&... values);
 };
 
+namespace internal {
+void PrintTextMarker(TextFormat::BaseTextGenerator* generator, bool redact,
+                     bool randomize, bool single_line_mode);
+}  // namespace internal
 
 inline void TextFormat::RecordLocation(ParseInfoTree* info_tree,
                                        const FieldDescriptor* field,

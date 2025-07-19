@@ -10,6 +10,7 @@
 
 #include "upb/message/array.h"
 #include "upb/message/map.h"
+#include "upb/message/value.h"
 #include "upb/wire/decode.h"
 
 // Must be last.
@@ -52,6 +53,7 @@ typedef struct {
   const char* ptr;
   // Size of unknown field data.
   size_t len;
+  uintptr_t iter;
 } upb_FindUnknownRet;
 
 // Finds first occurrence of unknown data by tag id in message.
@@ -114,6 +116,10 @@ upb_DecodeStatus upb_Array_PromoteMessages(upb_Array* arr,
 upb_DecodeStatus upb_Map_PromoteMessages(upb_Map* map,
                                          const upb_MiniTable* mini_table,
                                          int decode_options, upb_Arena* arena);
+
+// Utility function for wrapper languages to get an error string from a
+// upb_UnknownToMessageStatus.
+const char* upb_FindUnknownStatus_String(upb_FindUnknown_Status status);
 
 ////////////////////////////////////////////////////////////////////////////////
 // OLD promotion interfaces, will be removed!

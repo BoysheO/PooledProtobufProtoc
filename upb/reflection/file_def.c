@@ -170,7 +170,18 @@ const upb_MiniTableExtension* _upb_FileDef_ExtensionMiniTable(
   return f->ext_layouts[i];
 }
 
-static char* strviewdup(upb_DefBuilder* ctx, upb_StringView view) {
+// Note: Import cycles are not allowed so this will terminate.
+bool upb_FileDef_Resolves(const upb_FileDef* f, const char* path) {
+  if (!strcmp(f->name, path)) return true;
+
+  for (int i = 0; i < upb_FileDef_PublicDependencyCount(f); i++) {
+    const upb_FileDef* dep = upb_FileDef_PublicDependency(f, i);
+    if (upb_FileDef_Resolves(dep, path)) return true;
+  }
+  return false;
+}
+
+static char* _strviewdup(upb_DefBuilder* ctx, upb_StringView view) {
   char* ret = upb_strdup2(view.data, view.size, _upb_DefBuilder_Arena(ctx));
   if (!ret) _upb_DefBuilder_OomErr(ctx);
   return ret;
@@ -221,20 +232,35 @@ const UPB_DESC(FeatureSet*)
   size_t n;
   const UPB_DESC(FeatureSetDefaults_FeatureSetEditionDefault)* const* d =
       UPB_DESC(FeatureSetDefaults_defaults)(defaults, &n);
-  const UPB_DESC(FeatureSet)* ret = NULL;
+  const UPB_DESC(FeatureSetDefaults_FeatureSetEditionDefault)* result = NULL;
   for (size_t i = 0; i < n; i++) {
     if (UPB_DESC(FeatureSetDefaults_FeatureSetEditionDefault_edition)(d[i]) >
         edition) {
       break;
     }
-    ret = UPB_DESC(FeatureSetDefaults_FeatureSetEditionDefault_features)(d[i]);
+    result = d[i];
   }
-  if (ret == NULL) {
+  if (result == NULL) {
     _upb_DefBuilder_Errf(ctx, "No valid default found for edition %s",
                          upb_FileDef_EditionName(edition));
     return NULL;
   }
-  return ret;
+
+  // Merge the fixed and overridable features to get the edition's default
+  // feature set.
+  const UPB_DESC(FeatureSet)* fixed = UPB_DESC(
+      FeatureSetDefaults_FeatureSetEditionDefault_fixed_features)(result);
+  const UPB_DESC(FeatureSet)* overridable = UPB_DESC(
+      FeatureSetDefaults_FeatureSetEditionDefault_overridable_features)(result);
+  if (!fixed && !overridable) {
+    _upb_DefBuilder_Errf(ctx, "No valid default found for edition %s",
+                         upb_FileDef_EditionName(edition));
+    return NULL;
+  } else if (!fixed) {
+    return overridable;
+  }
+  return _upb_DefBuilder_DoResolveFeatures(ctx, fixed, overridable,
+                                           /*is_implicit=*/true);
 }
 
 // Allocate and initialize one file def, and add it to the context object.
@@ -277,14 +303,14 @@ void _upb_FileDef_Create(upb_DefBuilder* ctx,
     file->ext_layouts = _upb_DefBuilder_Alloc(
         ctx, sizeof(*file->ext_layouts) * file->ext_count);
     upb_MiniTableExtension* ext =
-        _upb_DefBuilder_Alloc(ctx, sizeof(*ext) * file->ext_count);
+        UPB_DEFBUILDER_ALLOCARRAY(ctx, upb_MiniTableExtension, file->ext_count);
     for (int i = 0; i < file->ext_count; i++) {
       file->ext_layouts[i] = &ext[i];
     }
   }
 
   upb_StringView name = UPB_DESC(FileDescriptorProto_name)(file_proto);
-  file->name = strviewdup(ctx, name);
+  file->name = _strviewdup(ctx, name);
   if (strlen(file->name) != name.size) {
     _upb_DefBuilder_Errf(ctx, "File name contained embedded NULL");
   }
@@ -293,7 +319,7 @@ void _upb_FileDef_Create(upb_DefBuilder* ctx,
 
   if (package.size) {
     _upb_DefBuilder_CheckIdentFull(ctx, package);
-    file->package = strviewdup(ctx, package);
+    file->package = _strviewdup(ctx, package);
   } else {
     file->package = NULL;
   }
@@ -336,7 +362,7 @@ void _upb_FileDef_Create(upb_DefBuilder* ctx,
   // Verify dependencies.
   strs = UPB_DESC(FileDescriptorProto_dependency)(file_proto, &n);
   file->dep_count = n;
-  file->deps = _upb_DefBuilder_Alloc(ctx, sizeof(*file->deps) * n);
+  file->deps = UPB_DEFBUILDER_ALLOCARRAY(ctx, const upb_FileDef*, n);
 
   for (size_t i = 0; i < n; i++) {
     upb_StringView str = strs[i];
@@ -352,8 +378,7 @@ void _upb_FileDef_Create(upb_DefBuilder* ctx,
 
   public_deps = UPB_DESC(FileDescriptorProto_public_dependency)(file_proto, &n);
   file->public_dep_count = n;
-  file->public_deps =
-      _upb_DefBuilder_Alloc(ctx, sizeof(*file->public_deps) * n);
+  file->public_deps = UPB_DEFBUILDER_ALLOCARRAY(ctx, int32_t, n);
   int32_t* mutable_public_deps = (int32_t*)file->public_deps;
   for (size_t i = 0; i < n; i++) {
     if (public_deps[i] >= file->dep_count) {
@@ -365,7 +390,7 @@ void _upb_FileDef_Create(upb_DefBuilder* ctx,
 
   weak_deps = UPB_DESC(FileDescriptorProto_weak_dependency)(file_proto, &n);
   file->weak_dep_count = n;
-  file->weak_deps = _upb_DefBuilder_Alloc(ctx, sizeof(*file->weak_deps) * n);
+  file->weak_deps = UPB_DEFBUILDER_ALLOCARRAY(ctx, const int32_t, n);
   int32_t* mutable_weak_deps = (int32_t*)file->weak_deps;
   for (size_t i = 0; i < n; i++) {
     if (weak_deps[i] >= file->dep_count) {
@@ -427,8 +452,15 @@ void _upb_FileDef_Create(upb_DefBuilder* ctx,
   }
 
   if (file->ext_count) {
-    bool ok = upb_ExtensionRegistry_AddArray(
+    upb_ExtensionRegistryStatus status = upb_ExtensionRegistry_AddArray(
         _upb_DefPool_ExtReg(ctx->symtab), file->ext_layouts, file->ext_count);
-    if (!ok) _upb_DefBuilder_OomErr(ctx);
+    if (status != kUpb_ExtensionRegistryStatus_Ok) {
+      if (status == kUpb_ExtensionRegistryStatus_OutOfMemory) {
+        _upb_DefBuilder_OomErr(ctx);
+      }
+
+      UPB_ASSERT(status == kUpb_ExtensionRegistryStatus_DuplicateEntry);
+      _upb_DefBuilder_Errf(ctx, "duplicate extension entry");
+    }
   }
 }

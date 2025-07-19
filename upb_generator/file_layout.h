@@ -9,24 +9,14 @@
 #define UPB_GENERATOR_FILE_LAYOUT_H
 
 #include <string>
-
-// begin:google_only
-// #ifndef UPB_BOOTSTRAP_STAGE0
-// #include "google/protobuf/descriptor.upb.h"
-// #else
-// #include "google/protobuf/descriptor.upb.h"
-// #endif
-// end:google_only
-
-// begin:github_only
-#include "google/protobuf/descriptor.upb.h"
-// end:github_only
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "upb/base/status.hpp"
 #include "upb/mini_descriptor/decode.h"
 #include "upb/reflection/def.h"
 #include "upb/reflection/def.hpp"
+#include "upb/reflection/descriptor_bootstrap.h"
 
 // Must be last
 #include "upb/port/def.inc"
@@ -72,6 +62,10 @@ class DefPoolPair {
     upb::FileDefPtr file64 = pool64_.AddFile(file_proto, status);
     if (!file32) return file32;
     return file64;
+  }
+
+  upb::FileDefPtr GetFile(absl::string_view name) const {
+    return pool64_.FindFileByName(name.data());
   }
 
   const upb_MiniTable* GetMiniTable32(upb::MessageDefPtr m) const {
