@@ -12,7 +12,8 @@ RUN mkdir -p cmake/build && \
     cd cmake/build && \
     cmake ../.. -Dprotobuf_BUILD_TESTS=ON && \
     make -j$(nproc) && \
-    ctest --output-on-failure
+    ctest --output-on-failure && \
+    make install
 
 # === Stage 2: Slim image with only protoc ===
 FROM debian:bookworm-slim
