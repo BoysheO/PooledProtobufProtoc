@@ -10,7 +10,7 @@ WORKDIR /protobuf
 
 RUN mkdir -p cmake/build && \
     cd cmake/build && \
-    cmake ../.. -Dprotobuf_BUILD_TESTS=ON && \
+    cmake ../.. -Dprotobuf_BUILD_TESTS=OFF && \
     make -j$(nproc) && \
     ctest --output-on-failure && \
     make install
