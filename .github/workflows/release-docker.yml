@@ -31,5 +31,5 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: |
-            boysheo/pooled-protoc:latest
-            boysheo/pooled-protoc:${{ github.ref_name }}
+            boysheo/protoc_pool_odin:latest
+            boysheo/protoc_pool_odin:${{ github.ref_name }}
