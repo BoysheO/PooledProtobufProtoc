@@ -1,0 +1,14 @@
+name: Test Any Push Trigger
+
+on:
+  push:  # 任何 push 都会触发（包括分支提交和 tag 推送）
+
+jobs:
+  show-trigger-info:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print raw GitHub ref info
+        run: |
+          echo "🔔 Triggered by: $GITHUB_EVENT_NAME"
+          echo "📌 Ref: $GITHUB_REF"
+          echo "📂 Branch (if applicable): ${GITHUB_REF#refs/heads/}"
