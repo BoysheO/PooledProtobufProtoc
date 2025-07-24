@@ -1,0 +1,13 @@
+name: Test Tag Trigger
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  test-log:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print trigger confirmation
+        run: echo "✅ GitHub Action was triggered by tag $GITHUB_REF"
