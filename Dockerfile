@@ -23,4 +23,4 @@ COPY --from=builder /usr/local/include/google /usr/local/include/google
 
 RUN apt-get update && apt-get install -y libprotobuf-dev && apt-get clean
 
-ENTRYPOINT ["protoc"]
+ENTRYPOINT ["/bin/sh"]
