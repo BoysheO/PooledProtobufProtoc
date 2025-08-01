@@ -43,6 +43,7 @@ void RepeatedEnumFieldGenerator::GenerateMembers(io::Printer* printer) {
   AddPublicMemberAttributes(printer);
   printer->Print(
     variables_,
+      "[global::Sirenix.OdinInspector.ShowInInspector]\n"
     "$access_level$ pbc::RepeatedField<$type_name$> $property_name$ {\n"
     "  get { return $name$_; }\n"
     "}\n");

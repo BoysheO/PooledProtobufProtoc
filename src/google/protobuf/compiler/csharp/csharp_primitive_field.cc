@@ -78,7 +78,7 @@ void PrimitiveFieldGenerator::GenerateMembers(io::Printer* printer) {
 
   // Most of the work is done in the property:
   // Declare the property itself (the same for all options)
-  printer->Print(variables_, "$access_level$ $type_name$ $property_name$ {\n");
+  printer->Print(variables_, "[global::Sirenix.OdinInspector.ShowInInspector]\n$access_level$ $type_name$ $property_name$ {\n");
 
   // Specify the "getter", which may need to check for a presence field.
   if (SupportsPresenceApi(descriptor_)) {
@@ -263,6 +263,7 @@ void PrimitiveOneofFieldGenerator::GenerateMembers(io::Printer* printer) {
   AddPublicMemberAttributes(printer);
   printer->Print(
     variables_,
+    "[global::Sirenix.OdinInspector.ShowInInspector]\n"
     "$access_level$ $type_name$ $property_name$ {\n"
     "  get { return $has_property_check$ ? ($type_name$) $oneof_name$_ : $default_value$; }\n"
     "  set {\n");

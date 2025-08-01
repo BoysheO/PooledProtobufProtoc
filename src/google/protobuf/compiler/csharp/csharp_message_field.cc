@@ -44,6 +44,7 @@ void MessageFieldGenerator::GenerateMembers(io::Printer* printer) {
   AddPublicMemberAttributes(printer);
   printer->Print(
     variables_,
+    "[global::Sirenix.OdinInspector.ShowInInspector]\n"
     "$access_level$ $type_name$ $property_name$ {\n"
     "  get { return $name$_; }\n"
     "  set {\n"
@@ -57,6 +58,7 @@ void MessageFieldGenerator::GenerateMembers(io::Printer* printer) {
     AddPublicMemberAttributes(printer);
     printer->Print(
       variables_,
+      "[global::Sirenix.OdinInspector.ShowInInspector]\n"
       "$access_level$ bool Has$property_name$ {\n"
       "  get { return $name$_ != null; }\n"
       "}\n");
@@ -194,6 +196,8 @@ void MessageOneofFieldGenerator::GenerateMembers(io::Printer* printer) {
   AddPublicMemberAttributes(printer);
   printer->Print(
     variables_,
+    "[global::Sirenix.OdinInspector.ShowIf(\"$has_property_check$\")]\n" 
+    "[global::Sirenix.OdinInspector.ShowInInspector]\n"
     "$access_level$ $type_name$ $property_name$ {\n"
     "  get { return $has_property_check$ ? ($type_name$) $oneof_name$_ : null; }\n"
     "  set {\n"

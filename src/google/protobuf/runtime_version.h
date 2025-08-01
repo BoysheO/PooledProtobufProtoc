@@ -17,9 +17,8 @@
 #error PROTOBUF_OSS_VERSION_SUFFIX was previously defined
 #endif  // PROTOBUF_OSS_VERSION_SUFFIX
 
-// The OSS versions are not stripped to avoid merging conflicts.
 #define PROTOBUF_OSS_VERSION 6031001
-#define PROTOBUF_OSS_VERSION_SUFFIX ""
+#define PROTOBUF_OSS_VERSION_SUFFIX "-odin"
 
 #define PROTOBUF_VERSION PROTOBUF_OSS_VERSION
 #define PROTOBUF_VERSION_SUFFIX PROTOBUF_OSS_VERSION_SUFFIX
